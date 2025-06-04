@@ -1,0 +1,121 @@
+{
+  "severity1": {
+    "name": "Business Priority Level 1 - Critical | HOT FIX",
+    "description": "An incident that results in a complete or substantial loss of service, data loss/corruption, or inability to use mission-critical applications in Production Systems",
+    "response_time": "Immediate, less than one hour",
+    "resolution_time": "Same day",
+    "objective_criteria": [
+      "Complete site or page non-responsiveness on Lexus.com",
+      "500 server errors (entire site or specific node)",
+      "404 errors on production pages",
+      "L/Certified search inventory returning no results",
+      "SIT returning no results or incorrect results",
+      "Sales Events, Global Navigation, Find a dealer, or Vehicle landing pages not functioning",
+      "Incorrect MSRP information (excluding 'as shown' pricing)",
+      "Incorrect MPG information displayed",
+      "Missing or incorrect disclaimers for MSRP or MPG",
+      "Incorrect offers information",
+      "Major recalls information issues",
+      "User login failures",
+      "Form submission errors or failures",
+      "Form submissions not reaching LLMS",
+      "Major issues with media driving pages",
+      "Impact affecting more than 10% of Lexus.com",
+      "One of the key pages in the application (Select Model/Select Trim/Configurator/Summary) page does not load.",
+      "All vehicle models fail to display in the Select Model, or as a Select Trim page.",
+      "Primary KPI failing:View Inventory CTAs fail across the application. Contact dealer submission unable to be completed.",
+      "System errors preventing all users from customizing vehicle selections.",
+      "Service errors that cause issues with the application loading.",
+      "The Service Scheduler Tool component does not load.",
+      "The Service Scheduler Services are down.",
+      "Not able to schedule an appointment for all dealers (happy path not working)."
+    ],
+    "deployment_response": {
+      "content": "Deploy to PROD for LDM UAT and approval for same day deployment",
+      "code": "Emergency Release train and cache clears"
+    }
+  },
+  "severity2": {
+    "name": "Business Priority Level 2 - Significant",
+    "description": "An incident with degraded functionality that can be circumvented, disabled functions while system remains operable, or substantial loss in pre-production",
+    "response_time": "High priority, less than 4 hours",
+    "resolution_time": "Next day or next release",
+    "objective_criteria": [
+      "One section of the site having intermittent issues",
+      "Incorrect disclaimers not related to MSRP and MPG",
+      "Missing disclaimers not related to MSRP or MPG",
+      "Minor recalls information issues",
+      "Dealer information displaying incorrectly",
+      "Users unable to update their profile",
+      "Users unable to add/retrieve vehicles",
+      "Form submissions not reaching EMD",
+      "Major product content errors on Lexus.com or My Lexus",
+      "Minor issues with media driving pages",
+      "Impact affecting more than 5% but less than 10% of Lexus.com",
+      "The Service Scheduler Dashboard not loading.",
+      "Not able to schedule an appointment for one or a group or dealers.", 
+      "Dealer search not working.",
+      "Cancel/Edit appointment not working.",
+      "Feature names not correctly displaying for a particular trim/package configuration.",
+      "Regional Inventory Build is not functioning for a specific geographic region. (Service dependent - iCrossing)",
+      "Issues in syncing between the frontend UI and backend services leading to delays in rendering updates.",
+      "Minor issues in configuration service, conflict modals, resulting in unclear conflict remediation.",
+      "Users able to complete invalid builds in the vehicle configurator.",
+      "Configuration options (e.g., color or accessories) are incorrect or missing for less commonly selected models."
+    ],
+    "deployment_response": {
+      "content": "Deploy to PROD for LDM UAT and approval for next day deployment",
+      "code": "Add to the next available release train"
+    }
+  },
+  "severity3": {
+    "name": "Business Priority Level 3 - Medium",
+    "description": "Medium-to-low impact problem with partial non-critical functionality loss that allows operations to continue with minor limitations",
+    "response_time": "Normal",
+    "resolution_time": "Add to backlog",
+    "objective_criteria": [
+      "Minor product errors not affecting critical functionality",
+      "Users unable to retrieve or add service records",
+      "Users unable to access user manuals",
+      "Users unable to access maintenance schedule",
+      "Users not receiving confirmation emails",
+      "Analytics issues (Ensighten, Omniture, Adobe Analytics)",
+      "Cases where API responses result in slow loading times for some vehicle configurations.",
+      "Issues with images loading slowly, or incompletely for a particular configuration.",
+      "General metadata issues with images - resulting in users seeing incorrect images during configuration or not seeing an image for a particular configuration.",
+      "Services data for some dealers are incorrect.",
+      "Not able to schedule an appointment for edge cases",
+      "Incorrect dealers information such as phone number, amenities, other",
+      "Upcoming/Past appointments not loading."
+    ],
+    "deployment_response": {
+      "content": "Add to backlog",
+      "code": "Add to backlog"
+    }
+  },
+  "severity4": {
+    "name": "Business Priority Level 4 - Normal",
+    "description": "Minimal business impact with no loss of service and no significant effect on software usability",
+    "response_time": "Low priority",
+    "resolution_time": "Add to backlog",
+    "objective_criteria": [
+      "Broken images",
+      "Cosmetic Issues",
+      "User interface issues or bugs not affecting functionality",
+      "Questions and enhancement requests",
+      "Font or color inconsistencies across the configurator UI.",
+      "Misalignment of buttons or CTAs in specific viewports.",
+      "Non-critical text errors or content improvements (e.g., outdated marketing copy).",
+      "Visual design enhancements based on user feedback."
+    ],
+    "deployment_response": {
+      "content": "Add to backlog",
+      "code": "Add to backlog"
+    }
+  },
+  "metadata": {
+    "assessment_process": "Initial severity assessment done by Team One, then assigned by Lexus Digital Marketing Business and ITX",
+    "adjustment_policy": "Level can be upgraded or downgraded at any time by Lexus Business",
+    "scope": "This SLA covers Team One responsibilities (Content/code)"
+  }
+}

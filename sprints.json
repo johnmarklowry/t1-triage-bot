@@ -1,0 +1,137 @@
+[
+  {
+    "sprintName": "FY25 Sp25",
+    "startDate": "2025-03-18",
+    "endDate":   "2025-03-26"
+  },
+  {
+    "sprintName": "FY26 Sp1",
+    "startDate": "2025-03-27",
+    "endDate":   "2025-04-09"
+  },
+  {
+    "sprintName": "FY26 Sp2",
+    "startDate": "2025-04-10",
+    "endDate":   "2025-04-23"
+  },
+  {
+    "sprintName": "FY26 Sp3",
+    "startDate": "2025-04-24",
+    "endDate":   "2025-05-07"
+  },
+  {
+    "sprintName": "FY26 Sp4",
+    "startDate": "2025-05-08",
+    "endDate":   "2025-05-21"
+  },
+  {
+    "sprintName": "FY26 Sp5",
+    "startDate": "2025-05-22",
+    "endDate":   "2025-06-04"
+  },
+  {
+    "sprintName": "FY26 Sp6",
+    "startDate": "2025-06-05",
+    "endDate":   "2025-06-18"
+  },
+  {
+    "sprintName": "FY26 Sp7",
+    "startDate": "2025-06-19",
+    "endDate":   "2025-07-02"
+  },
+  {
+    "sprintName": "FY26 Sp8",
+    "startDate": "2025-07-03",
+    "endDate":   "2025-07-16"
+  },
+  {
+    "sprintName": "FY26 Sp9",
+    "startDate": "2025-07-17",
+    "endDate":   "2025-07-30"
+  },
+  {
+    "sprintName": "FY26 Sp10",
+    "startDate": "2025-07-31",
+    "endDate":   "2025-08-13"
+  },
+  {
+    "sprintName": "FY26 Sp11",
+    "startDate": "2025-08-14",
+    "endDate":   "2025-08-27"
+  },
+  {
+    "sprintName": "FY26 Sp12",
+    "startDate": "2025-08-28",
+    "endDate":   "2025-09-10"
+  },
+  {
+    "sprintName": "FY26 Sp13",
+    "startDate": "2025-09-11",
+    "endDate":   "2025-09-24"
+  },
+  {
+    "sprintName": "FY26 Sp14",
+    "startDate": "2025-09-25",
+    "endDate":   "2025-10-08"
+  },
+  {
+    "sprintName": "FY26 Sp15",
+    "startDate": "2025-10-09",
+    "endDate":   "2025-10-22"
+  },
+  {
+    "sprintName": "FY26 Sp16",
+    "startDate": "2025-10-23",
+    "endDate":   "2025-11-05"
+  },
+  {
+    "sprintName": "FY26 Sp17",
+    "startDate": "2025-11-06",
+    "endDate":   "2025-11-19"
+  },
+  {
+    "sprintName": "FY26 Sp18",
+    "startDate": "2025-11-20",
+    "endDate":   "2025-12-03"
+  },
+  {
+    "sprintName": "FY26 Sp19",
+    "startDate": "2025-12-04",
+    "endDate":   "2025-12-17"
+  },
+  {
+    "sprintName": "FY26 Sp20",
+    "startDate": "2025-12-18",
+    "endDate":   "2025-12-31"
+  },
+  {
+    "sprintName": "FY26 Sp21",
+    "startDate": "2026-01-01",
+    "endDate":   "2026-01-14"
+  },
+  {
+    "sprintName": "FY26 Sp22",
+    "startDate": "2026-01-15",
+    "endDate":   "2026-01-28"
+  },
+  {
+    "sprintName": "FY26 Sp23",
+    "startDate": "2026-01-29",
+    "endDate":   "2026-02-11"
+  },
+  {
+    "sprintName": "FY26 Sp24",
+    "startDate": "2026-02-12",
+    "endDate":   "2026-02-25"
+  },
+  {
+    "sprintName": "FY26 Sp25",
+    "startDate": "2026-02-26",
+    "endDate":   "2026-03-11"
+  },
+  {
+    "sprintName": "FY26 Sp26",
+    "startDate": "2026-03-12",
+    "endDate":   "2026-03-25"
+  }
+]

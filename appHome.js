@@ -6,7 +6,7 @@ const { App, ExpressReceiver } = require('@slack/bolt');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
 const timezone = require('dayjs/plugin/timezone');
-``
+
 // Import centralized data utilities
 const {
   readCurrentState,

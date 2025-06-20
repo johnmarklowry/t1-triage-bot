@@ -25,7 +25,8 @@
   ],
   "uiEng": [
     { "name": "Frank",      "slackId": "U2SKVLZPF" },
-    { "name": "Raymond",    "slackId": "U025QANMR" }
+    { "name": "Raymond",    "slackId": "U025QANMR" },
+    { "name": "Erik",    "slackId": "U08MGUU3NQY" }
   ],
   "beEng": [
     { "name": "Scott",      "slackId": "U070B5NMU" },

@@ -1,10 +1,6 @@
 /********************************
  * testRoutes.js
- * 
- * Extended with:
- *   /test/current-state        -> View currentState
- *   /test/set-state           -> Force a new sprint index
- *   /test/immediate-rotation  -> Trigger immediate rotation
+ * Fixed to remove duplicate routes and add validation endpoints
  ********************************/
 const express = require('express');
 const router = express.Router();
@@ -37,9 +33,9 @@ const {
   findNextSprint: dataUtilsFindNextSprint,
   formatPTDate,
   parsePTDate,
-  getTodayPT
+  getTodayPT,
+  refreshCurrentState
 } = require("./dataUtils");
-
 
 // Import the relevant functions
 const {
@@ -54,44 +50,6 @@ const {
   setCurrentSprintState,
   getCurrentState
 } = require('./triageLogic');
-
-/**
- * GET /test/channel-topic-current
- * Updates the channel topic with the current on-call members from currentState.
- */
-router.get('/channel-topic-current', async (req, res) => {
-  try {
-    const current = getCurrentState();
-    if (!current || !current.sprintIndex) {
-      return res.status(400).send('No current sprint or on-call members in state.');
-    }
-
-    // Build array of user IDs (not the formatted string)
-    const onCallIds = [
-      current.account,
-      current.producer,
-      current.po,
-      current.uiEng,
-      current.beEng
-    ].filter(Boolean); // remove undefined or null if any
-
-    if (onCallIds.length === 0) {
-      return res.status(400).send('No on-call members found in current state.');
-    }
-
-    // Just pass the array of user IDs to updateChannelTopic
-    await updateChannelTopic(onCallIds);
-    
-    // For display in the response, create the formatted topic
-    const mentionList = onCallIds.map(id => `<@${id}>`).join(', ');
-    const topicPreview = `Bug Link Only - keep conversations in threads.\nTriage Team: ${mentionList}`;
-    
-    res.send(`Channel topic updated with on-call members: ${onCallIds.join(', ')}\nPreview: ${topicPreview}`);
-  } catch (err) {
-    console.error('[channel-topic-current] Error:', err);
-    res.status(500).send(`Error updating channel topic: ${err.message}`);
-  }
-});
 
 // For the Slack test, specify a user via .env or query param
 const TEST_SLACK_USER = process.env.TEST_SLACK_USER || null;
@@ -175,7 +133,7 @@ router.get('/check', async (req, res) => {
  */
 router.get('/current-state', (req, res) => {
   try {
-    const current = getCurrentState(); // Or triageLogic.currentState if exported directly
+    const current = getCurrentState();
     res.json({
       message: 'Here is the current on-call state in memory.',
       state: current
@@ -236,7 +194,7 @@ router.get('/channel-topic-current', async (req, res) => {
       return res.status(400).send('No current sprint or on-call members in state.');
     }
 
-    // Build mention list from the roles
+    // Build array of user IDs (not the formatted string)
     const onCallIds = [
       current.account,
       current.producer,
@@ -249,40 +207,17 @@ router.get('/channel-topic-current', async (req, res) => {
       return res.status(400).send('No on-call members found in current state.');
     }
 
+    // Just pass the array of user IDs to updateChannelTopic
+    await updateChannelTopic(onCallIds);
+    
+    // For display in the response, create the formatted topic
     const mentionList = onCallIds.map(id => `<@${id}>`).join(', ');
-    const newTopic =
-      `Bug Link Only - keep conversations in threads.\n` +
-      `Triage Team: ${mentionList}`;
-
-    await updateChannelTopic(newTopic);
-    res.send(`Channel topic updated to:\n${newTopic}`);
+    const topicPreview = `Bug Link Only - keep conversations in threads.\nTriage Team: ${mentionList}`;
+    
+    res.send(`Channel topic updated with on-call members: ${onCallIds.join(', ')}\nPreview: ${topicPreview}`);
   } catch (err) {
     console.error('[channel-topic-current] Error:', err);
     res.status(500).send(`Error updating channel topic: ${err.message}`);
-  }
-});
-
-/**
- * GET /test/set-state?sprintIndex=2
- * Force a new sprintIndex manually
- */
-router.get('/set-state', async (req, res) => {
-  try {
-    const sprintIndexStr = req.query.sprintIndex;
-    if (!sprintIndexStr) {
-      return res.status(400).send('Please provide ?sprintIndex=');
-    }
-
-    const sprintIndex = parseInt(sprintIndexStr, 10);
-    if (isNaN(sprintIndex)) {
-      return res.status(400).send('Invalid sprintIndex. Must be a number.');
-    }
-
-    await setCurrentSprintState(sprintIndex);
-    res.send(`Successfully set sprintIndex to ${sprintIndex}. Check /test/current-state for details.`);
-  } catch (err) {
-    console.error('[set-state] Error:', err);
-    res.status(500).send(`Error setting sprint state: ${err.message}`);
   }
 });
 
@@ -313,6 +248,95 @@ router.get('/timezone-debug', (req, res) => {
   } catch (err) {
     console.error('[timezone-debug] Error:', err);
     res.status(500).send(`Error getting timezone info: ${err.message}`);
+  }
+});
+
+/**
+ * GET /test/validate-data
+ * Validates all data files for consistency and integrity
+ */
+router.get('/validate-data', (req, res) => {
+  try {
+    const issues = [];
+    
+    // Check disciplines for duplicate users
+    const disciplines = dataUtils.readDisciplines();
+    const allUsers = new Map(); // userId -> { discipline, name }
+    
+    for (const [discipline, users] of Object.entries(disciplines)) {
+      if (!Array.isArray(users)) {
+        issues.push(`Discipline ${discipline} is not an array`);
+        continue;
+      }
+      
+      for (const user of users) {
+        if (allUsers.has(user.slackId)) {
+          const existing = allUsers.get(user.slackId);
+          issues.push(`User ${user.slackId} (${user.name}) appears in multiple disciplines: ${existing.discipline} and ${discipline}`);
+        } else {
+          allUsers.set(user.slackId, { discipline, name: user.name });
+        }
+      }
+    }
+    
+    // Check current state for validity
+    const currentState = dataUtils.readCurrentState();
+    if (currentState.sprintIndex !== null) {
+      const sprints = dataUtils.readSprints();
+      if (currentState.sprintIndex >= sprints.length) {
+        issues.push(`Current state sprint index ${currentState.sprintIndex} is out of bounds (only ${sprints.length} sprints)`);
+      }
+      
+      // Check if current state users exist in disciplines
+      ['account', 'producer', 'po', 'uiEng', 'beEng'].forEach(role => {
+        const userId = currentState[role];
+        if (userId && !allUsers.has(userId)) {
+          issues.push(`Current state ${role} user ${userId} not found in any discipline`);
+        }
+      });
+      
+      // Check for duplicate users in current state
+      const stateUsers = [
+        currentState.account,
+        currentState.producer,
+        currentState.po,
+        currentState.uiEng,
+        currentState.beEng
+      ].filter(Boolean);
+      
+      const uniqueStateUsers = new Set(stateUsers);
+      if (stateUsers.length !== uniqueStateUsers.size) {
+        issues.push(`Current state has duplicate users`);
+      }
+    }
+    
+    // Check overrides
+    const overrides = dataUtils.readOverrides();
+    overrides.forEach((override, i) => {
+      if (!allUsers.has(override.newSlackId)) {
+        issues.push(`Override ${i}: replacement user ${override.newSlackId} not found in disciplines`);
+      }
+      if (!allUsers.has(override.requestedBy)) {
+        issues.push(`Override ${i}: requester ${override.requestedBy} not found in disciplines`);
+      }
+    });
+    
+    // Test refreshCurrentState
+    const refreshed = dataUtils.refreshCurrentState();
+    
+    res.json({
+      validationComplete: true,
+      issuesFound: issues.length,
+      issues: issues,
+      stateRefreshed: refreshed,
+      summary: issues.length === 0 ? "All data files are valid!" : `Found ${issues.length} issue(s)`
+    });
+  } catch (err) {
+    console.error('[validate-data] Error:', err);
+    res.status(500).json({
+      error: `Error validating data: ${err.message}`,
+      stack: err.stack
+    });
   }
 });
 

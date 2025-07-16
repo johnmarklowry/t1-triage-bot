@@ -1,7 +1,7 @@
 /**
  * dataUtils.js
  * Centralized data operations for the triage rotation app.
- * This replaces the functions previously in googleSheets.js with local JSON file operations.
+ * Updated with validation and consistency improvements
  */
 const fs = require('fs');
 const path = require('path');
@@ -20,20 +20,13 @@ const OVERRIDES_FILE = path.join(__dirname, "overrides.json");
 
 /**
  * Format a date consistently using Pacific Time
- * This standardizes date formatting across the application
- * @param {string} dateStr - Date string in YYYY-MM-DD format
- * @param {string} formatStr - Output format string (default: 'ddd MM/DD/YYYY')
- * @returns {string} Formatted date string
  */
 function formatPTDate(dateStr, formatStr = 'ddd MM/DD/YYYY') {
-  // Ensure consistent handling by explicitly setting date to midnight PT
   return dayjs.tz(`${dateStr}T00:00:00`, "America/Los_Angeles").format(formatStr);
 }
 
 /**
  * Parse a date string consistently as midnight PT
- * @param {string} dateStr - Date string in YYYY-MM-DD format
- * @returns {object} Dayjs object set to midnight PT on specified date
  */
 function parsePTDate(dateStr) {
   return dayjs.tz(`${dateStr}T00:00:00`, "America/Los_Angeles");
@@ -41,7 +34,6 @@ function parsePTDate(dateStr) {
 
 /**
  * Get today's date in Pacific Time, at start of day
- * @returns {object} Dayjs object for today at midnight PT
  */
 function getTodayPT() {
   return dayjs().tz("America/Los_Angeles").startOf("day");
@@ -76,7 +68,6 @@ function saveJSON(filePath, data) {
 
 /**
  * Get all sprints from sprints.json
- * Returns array of sprint objects with sprintName, startDate, endDate
  */
 function readSprints() {
   const sprints = loadJSON(SPRINTS_FILE);
@@ -88,11 +79,37 @@ function readSprints() {
 }
 
 /**
- * Get all disciplines from disciplines.json
- * Returns an object with role keys and arrays of user objects
+ * Get all disciplines from disciplines.json with validation
  */
 function readDisciplines() {
-  return loadJSON(DISCIPLINES_FILE) || {};
+  const disciplines = loadJSON(DISCIPLINES_FILE) || {};
+  
+  // Validate that no user appears in multiple disciplines
+  const allUsers = new Map(); // userId -> discipline
+  const duplicates = [];
+  
+  for (const [discipline, users] of Object.entries(disciplines)) {
+    if (!Array.isArray(users)) continue;
+    
+    for (const user of users) {
+      if (allUsers.has(user.slackId)) {
+        duplicates.push({
+          userId: user.slackId,
+          name: user.name,
+          disciplines: [allUsers.get(user.slackId), discipline]
+        });
+      } else {
+        allUsers.set(user.slackId, discipline);
+      }
+    }
+  }
+  
+  if (duplicates.length > 0) {
+    console.error('[readDisciplines] WARNING: Users found in multiple disciplines:', duplicates);
+    // You might want to notify admins here
+  }
+  
+  return disciplines;
 }
 
 /**
@@ -117,6 +134,24 @@ function readCurrentState() {
  * Save the current state to currentState.json
  */
 function saveCurrentState(state) {
+  // Validate no duplicate users in the state
+  const users = [state.account, state.producer, state.po, state.uiEng, state.beEng]
+    .filter(Boolean);
+  const uniqueUsers = new Set(users);
+  
+  if (users.length !== uniqueUsers.size) {
+    console.error('[saveCurrentState] WARNING: Duplicate users detected in state:', state);
+    // Find the duplicates
+    const userCounts = {};
+    users.forEach(u => {
+      userCounts[u] = (userCounts[u] || 0) + 1;
+    });
+    const duplicates = Object.entries(userCounts)
+      .filter(([_, count]) => count > 1)
+      .map(([userId, count]) => ({ userId, count }));
+    console.error('[saveCurrentState] Duplicate users:', duplicates);
+  }
+  
   return saveJSON(CURRENT_STATE_FILE, state);
 }
 
@@ -136,16 +171,13 @@ function saveOverrides(overrides) {
 
 /**
  * Find the current sprint based on today's date (in Pacific Time)
- * Returns { index, sprintName, startDate, endDate } or null if none found
  */
 function findCurrentSprint() {
   const sprints = readSprints();
-  // Use Pacific Time explicitly for the server's "today"
   const today = getTodayPT();
 
   for (let i = 0; i < sprints.length; i++) {
     const { sprintName, startDate, endDate } = sprints[i];
-    // Convert sprint dates to Pacific Time for comparison
     const sprintStart = parsePTDate(startDate);
     const sprintEnd = parsePTDate(endDate);
     
@@ -172,61 +204,128 @@ function findNextSprint(currentIndex) {
 }
 
 /**
+ * Get user for a specific sprint and role, handling overrides
+ */
+function getUserForSprintAndRole(sprintIndex, role, disciplines, overrides) {
+  // Check for an approved override first
+  const override = overrides.find(o =>
+    o.sprintIndex === sprintIndex &&
+    o.role === role &&
+    o.approved === true
+  );
+  
+  if (override) {
+    console.log(`[getUserForSprintAndRole] Found override for ${role} sprint ${sprintIndex}: ${override.newSlackId}`);
+    return override.newSlackId;
+  }
+  
+  // Fall back to regular rotation
+  const roleList = disciplines[role] || [];
+  if (roleList.length === 0) {
+    console.warn(`[getUserForSprintAndRole] No users in ${role} discipline, using fallback`);
+    return FALLBACK_USERS[role] || null;
+  }
+  
+  const userObj = roleList[sprintIndex % roleList.length];
+  return userObj ? userObj.slackId : FALLBACK_USERS[role];
+}
+
+/**
  * Gets the user mapping for a specific sprint index
- * Handles overrides if they exist
+ * This is the single source of truth for who should be on call
  */
 function getSprintUsers(sprintIndex) {
   const disciplines = readDisciplines();
   const overrides = readOverrides();
   
-  // Define fallback users if needed
   const FALLBACK_USERS = {
-    account:  "U70RLDSL9",  // Megan Miller - fallback for "account"
-    producer: "U081U8XP1",  // Matt Mitchell - fallback for "producer"
-    po:       "UA4K27ELX",  // John Mark Lowry - fallback for "po"
-    uiEng:    "U2SKVLZPF",  // Frank Tran - fallback for "uiEng"
-    beEng:    "UTSQ413T6",  // Lyle Stockmoe - fallback for "beEng"
+    account:  "U70RLDSL9",  // Megan Miller
+    producer: "U081U8XP1",  // Matt Mitchell
+    po:       "UA4K27ELX",  // John Mark Lowry
+    uiEng:    "U2SKVLZPF",  // Frank Tran
+    beEng:    "UTSQ413T6",  // Lyle Stockmoe
   };
 
-  function pickUser(list, role) {
-    // Check for an approved override for this sprint and role.
-    const override = overrides.find(o =>
-      o.sprintIndex === sprintIndex &&
-      o.role === role &&
-      o.approved === true
-    );
-    if (override) {
-      return override.newSlackId;
-    }
-    // Fallback to default rotation.
-    if (!list || list.length === 0) {
-      return FALLBACK_USERS[role] || "UA4K27ELX";
-    }
-    const userObj = list[sprintIndex % list.length];
-    return (userObj && userObj.slackId) ? userObj.slackId : FALLBACK_USERS[role];
+  const users = {
+    account: getUserForSprintAndRole(sprintIndex, "account", disciplines, overrides),
+    producer: getUserForSprintAndRole(sprintIndex, "producer", disciplines, overrides),
+    po: getUserForSprintAndRole(sprintIndex, "po", disciplines, overrides),
+    uiEng: getUserForSprintAndRole(sprintIndex, "uiEng", disciplines, overrides),
+    beEng: getUserForSprintAndRole(sprintIndex, "beEng", disciplines, overrides),
+  };
+  
+  // Validate no duplicate users
+  const userList = Object.values(users).filter(Boolean);
+  const uniqueUsers = new Set(userList);
+  
+  if (userList.length !== uniqueUsers.size) {
+    console.error('[getSprintUsers] WARNING: Duplicate users detected for sprint', sprintIndex);
+    const userCounts = {};
+    userList.forEach(u => {
+      userCounts[u] = (userCounts[u] || 0) + 1;
+    });
+    const duplicates = Object.entries(userCounts)
+      .filter(([_, count]) => count > 1);
+    console.error('[getSprintUsers] Duplicates:', duplicates);
   }
-
-  return {
-    account: pickUser(disciplines.account, "account"),
-    producer: pickUser(disciplines.producer, "producer"),
-    po: pickUser(disciplines.po, "po"),
-    uiEng: pickUser(disciplines.uiEng, "uiEng"),
-    beEng: pickUser(disciplines.beEng, "beEng"),
-  };
+  
+  return users;
 }
 
 /**
- * Get upcoming sprints from today onward.
+ * Get upcoming sprints from today onward
  */
 function getUpcomingSprints() {
   const allSprints = readSprints();
   const today = getTodayPT();
   
-  // Filter sprints with startDate >= today
   return allSprints.filter(sprint => {
     const sprintStart = parsePTDate(sprint.startDate);
     return sprintStart.isAfter(today) || sprintStart.isSame(today, 'day');
   });
+}
+
+/**
+ * Refresh the current state to ensure it matches calculated values
+ * This ensures consistency between what's displayed and what's actual
+ */
+function refreshCurrentState() {
+  const current = readCurrentState();
+  if (current.sprintIndex === null) {
+    console.log('[refreshCurrentState] No current sprint index set');
+    return false;
+  }
+  
+  // Get what the users SHOULD be based on calculation
+  const calculatedUsers = getSprintUsers(current.sprintIndex);
+  
+  // Check if they match current state
+  let needsUpdate = false;
+  const updates = [];
+  
+  ['account', 'producer', 'po', 'uiEng', 'beEng'].forEach(role => {
+    if (current[role] !== calculatedUsers[role]) {
+      needsUpdate = true;
+      updates.push({
+        role,
+        from: current[role],
+        to: calculatedUsers[role]
+      });
+    }
+  });
+  
+  if (needsUpdate) {
+    console.log('[refreshCurrentState] State needs update:', updates);
+    const newState = {
+      sprintIndex: current.sprintIndex,
+      ...calculatedUsers
+    };
+    saveCurrentState(newState);
+    return true;
+  }
+  
+  console.log('[refreshCurrentState] State is already up to date');
+  return false;
 }
 
 module.exports = {
@@ -250,6 +349,7 @@ module.exports = {
   findNextSprint,
   getSprintUsers,
   getUpcomingSprints,
+  refreshCurrentState,
   
   // File path constants
   CURRENT_STATE_FILE,

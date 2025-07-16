@@ -1,5 +1,6 @@
 /********************************
  * triageLogic.js
+ * Updated with deduplication and validation
  ********************************/
 const fs = require("fs");
 const path = require("path");
@@ -20,7 +21,8 @@ const {
   findNextSprint: dataUtilsFindNextSprint,
   formatPTDate,
   parsePTDate,
-  getTodayPT
+  getTodayPT,
+  refreshCurrentState
 } = require("./dataUtils");
 
 const { notifyUser, notifyAdmins, updateOnCallUserGroup, updateChannelTopic } = require("./slackNotifier");
@@ -34,11 +36,9 @@ const FALLBACK_USERS = {
   beEng:    "UTSQ413T6",  // Lyle Stockmoe - fallback for "beEng"
 };
 
-
 // Initialize currentState from file at startup
 let currentState = readCurrentState();
 console.log("[INIT] Loaded current state:", currentState);
-
 
 /* ======================================
    Utility Functions: Sprints & Users
@@ -46,7 +46,6 @@ console.log("[INIT] Loaded current state:", currentState);
 
 /**
  * findCurrentSprint: determines which sprint is active (today).
- * Returns { index, sprintName, startDate, endDate } or null if none found.
  */
 async function findCurrentSprint() {
   return dataUtilsFindCurrentSprint();
@@ -54,7 +53,6 @@ async function findCurrentSprint() {
 
 /**
  * findNextSprint: returns the next sprint (index+1) if it exists.
- * Otherwise, returns null.
  */
 async function findNextSprint(currentIndex) {
   return dataUtilsFindNextSprint(currentIndex);
@@ -69,18 +67,19 @@ function loadOverrides() {
 
 /**
  * getSprintUsers: For a given sprintIndex, returns the Slack user for each discipline.
- * It first checks for an approved override in overrides.json.
  */
 async function getSprintUsers(sprintIndex) {
   return dataUtilsGetSprintUsers(sprintIndex);
 }
 
-
 /**
- * rolesToArray: converts a roles object to an array of Slack user IDs.
+ * rolesToArray: converts a roles object to an array of unique Slack user IDs.
+ * Now includes deduplication to prevent multiple notifications
  */
 function rolesToArray(roles) {
-  return Object.values(roles).filter(Boolean);
+  const userIds = Object.values(roles).filter(Boolean);
+  // Remove duplicates
+  return [...new Set(userIds)];
 }
 
 /**
@@ -101,6 +100,17 @@ function diffRoles(oldRoles, newRoles) {
   return changes;
 }
 
+/**
+ * dedupedNotifyUsers: Send notifications to a list of users, but deduplicate first
+ */
+async function dedupedNotifyUsers(userIds, message) {
+  const uniqueUsers = [...new Set(userIds.filter(Boolean))];
+  console.log(`[dedupedNotifyUsers] Notifying ${uniqueUsers.length} unique users`);
+  
+  for (let userId of uniqueUsers) {
+    await notifyUser(userId, message);
+  }
+}
 
 /* ===============================
    5PM LOGIC
@@ -136,21 +146,23 @@ async function run5pmCheck() {
       const oldRoles = await getSprintUsers(currentSprint.index);
       const newRoles = await getSprintUsers(nextSprint.index);
 
-      // Notify old roles that their shift ends tomorrow
-      for (let userId of rolesToArray(oldRoles)) {
-        await notifyUser(userId, "Heads up: your #lcom-bug-triage shift ends tomorrow at 8AM PT.");
-      }
-      // Notify new roles they start tomorrow
-      for (let userId of rolesToArray(newRoles)) {
-        await notifyUser(userId, "You start #lcom-bug-triage duty tomorrow at 8AM PT. Good luck!");
-      }
+      // Notify old roles that their shift ends tomorrow (deduplicated)
+      await dedupedNotifyUsers(
+        rolesToArray(oldRoles), 
+        "Heads up: your #lcom-bug-triage shift ends tomorrow at 8AM PT."
+      );
+      
+      // Notify new roles they start tomorrow (deduplicated)
+      await dedupedNotifyUsers(
+        rolesToArray(newRoles),
+        "You start #lcom-bug-triage duty tomorrow at 8AM PT. Good luck!"
+      );
     }
   } catch (err) {
     console.error("[5PM Check] Error:", err);
     await notifyAdmins(`[5PM Check] Error: ${err.message}`);
   }
 }
-
 
 /**
  * run8amCheck:
@@ -160,6 +172,14 @@ async function run5pmCheck() {
 async function run8amCheck() {
   try {
     console.log("[8AM] Starting 8AM check");
+    
+    // First, refresh current state to ensure consistency
+    const stateUpdated = refreshCurrentState();
+    if (stateUpdated) {
+      console.log("[8AM] State was refreshed due to inconsistencies");
+      // Reload the current state after refresh
+      currentState = readCurrentState();
+    }
     
     const currentSprint = await findCurrentSprint();
     console.log("[8AM] Current sprint:", currentSprint ? 
@@ -194,20 +214,22 @@ async function run8amCheck() {
       };
       const newRoles = await getSprintUsers(currentSprint.index);
 
-      // Notify old roles
-      for (let userId of rolesToArray(oldRoles)) {
-        if (userId) {
-          await notifyUser(userId, "Your #lcom-bug-triage rotation is now complete. Thank you!");
-        }
-      }
-      // Notify new roles
-      for (let userId of rolesToArray(newRoles)) {
-        await notifyUser(userId, "You are now on #lcom-bug-triage duty. Good luck!");
-      }
+      // Notify old roles (deduplicated)
+      await dedupedNotifyUsers(
+        rolesToArray(oldRoles),
+        "Your #lcom-bug-triage rotation is now complete. Thank you!"
+      );
+      
+      // Notify new roles (deduplicated)
+      await dedupedNotifyUsers(
+        rolesToArray(newRoles),
+        "You are now on #lcom-bug-triage duty. Good luck!"
+      );
 
-      // Update Slack group and topic
-      await updateOnCallUserGroup(rolesToArray(newRoles));
-      await updateChannelTopic(rolesToArray(newRoles));
+      // Update Slack group and topic with deduplicated user list
+      const newUserArray = rolesToArray(newRoles);
+      await updateOnCallUserGroup(newUserArray);
+      await updateChannelTopic(newUserArray);
 
       // Update currentState and persist
       currentState = {
@@ -226,18 +248,40 @@ async function run8amCheck() {
 
       if (changes.length > 0) {
         console.log("[8AM] Mid-cycle changes detected:", changes);
+        
+        // Collect unique users who need to be notified
+        const usersToRemove = new Set();
+        const usersToAdd = new Set();
+        
         for (let c of changes) {
-          if (c.oldUser) {
-            await notifyUser(c.oldUser, `You have been removed from triage duty mid-sprint (role: ${c.role}).`);
-          }
-          if (c.newUser) {
-            await notifyUser(c.newUser, `You have been added to triage duty mid-sprint (role: ${c.role}).`);
+          if (c.oldUser) usersToRemove.add(c.oldUser);
+          if (c.newUser) usersToAdd.add(c.newUser);
+        }
+        
+        // Remove users who are both being removed and added (role swap)
+        for (let user of usersToAdd) {
+          if (usersToRemove.has(user)) {
+            usersToRemove.delete(user);
+            usersToAdd.delete(user);
+            // Notify them about role change
+            await notifyUser(user, `Your triage role has changed mid-sprint.`);
           }
         }
+        
+        // Notify removed users
+        for (let user of usersToRemove) {
+          await notifyUser(user, `You have been removed from triage duty mid-sprint.`);
+        }
+        
+        // Notify added users
+        for (let user of usersToAdd) {
+          await notifyUser(user, `You have been added to triage duty mid-sprint.`);
+        }
 
-        // Update Slack group and topic
-        await updateOnCallUserGroup(rolesToArray(newRoles));
-        await updateChannelTopic(rolesToArray(newRoles));
+        // Update Slack group and topic with deduplicated user list
+        const newUserArray = rolesToArray(newRoles);
+        await updateOnCallUserGroup(newUserArray);
+        await updateChannelTopic(newUserArray);
 
         // Update currentState and persist
         currentState = {
@@ -255,7 +299,6 @@ async function run8amCheck() {
   }
 }
 
-
 /* =================================
    Helper: Force a given sprintIndex
    (manual override if needed)
@@ -267,8 +310,12 @@ async function setCurrentSprintState(sprintIndex) {
       sprintIndex,
       ...roles,
     };
-    await updateOnCallUserGroup(rolesToArray(roles));
-    await updateChannelTopic(rolesToArray(roles));    
+    
+    // Update with deduplicated user list
+    const userArray = rolesToArray(roles);
+    await updateOnCallUserGroup(userArray);
+    await updateChannelTopic(userArray);
+    
     saveCurrentState(currentState);
     console.log(`[setCurrentSprintState] State set for sprint index ${sprintIndex}.`, currentState);
   } catch (err) {
@@ -276,7 +323,6 @@ async function setCurrentSprintState(sprintIndex) {
     await notifyAdmins(`[setCurrentSprintState] Error: ${err.message}`);
   }
 }
-
 
 /**
  * runImmediateRotation():
@@ -304,20 +350,27 @@ async function runImmediateRotation() {
     const newRoles = await getSprintUsers(currentSprint.index);
 
     if (hadOldState) {
-      for (let userId of rolesToArray(oldRoles)) {
-        await notifyUser(userId, "You have been taken off triage duty. Thank you!");
-      }
+      // Notify old users (deduplicated)
+      await dedupedNotifyUsers(
+        rolesToArray(oldRoles),
+        "You have been taken off triage duty. Thank you!"
+      );
     }
 
     // Format dates consistently
     const startStr = formatPTDate(currentSprint.startDate, 'MM/DD/YYYY');
     const endStr = formatPTDate(currentSprint.endDate, 'MM/DD/YYYY');
     
-    for (let userId of rolesToArray(newRoles)) {
-      await notifyUser(userId, `You are now on call for #lcom-bug-triage from ${startStr} to ${endStr}. Good luck!`);
-    }
-    await updateOnCallUserGroup(rolesToArray(newRoles));
-    await updateChannelTopic(rolesToArray(newRoles));
+    // Notify new users (deduplicated)
+    await dedupedNotifyUsers(
+      rolesToArray(newRoles),
+      `You are now on call for #lcom-bug-triage from ${startStr} to ${endStr}. Good luck!`
+    );
+    
+    // Update with deduplicated user list
+    const newUserArray = rolesToArray(newRoles);
+    await updateOnCallUserGroup(newUserArray);
+    await updateChannelTopic(newUserArray);
 
     currentState = {
       sprintIndex: currentSprint.index,
@@ -330,7 +383,6 @@ async function runImmediateRotation() {
     await notifyAdmins(`[Immediate Rotation] Error: ${err.message}`);
   }
 }
-
 
 /**
  * Force a sprint transition for testing purposes.
@@ -371,9 +423,9 @@ async function forceSprintTransition(newSprintIndex, mockNotifications = true) {
       return Promise.resolve();
     };
     
-    require('./slackNotifier').updateChannelTopic = (newTopic) => {
-      notifications.push({ type: 'topic', newTopic });
-      console.log(`[MOCK] Update channel topic with: ${newTopic}`);
+    require('./slackNotifier').updateChannelTopic = (userIds) => {
+      notifications.push({ type: 'topic', userIds });
+      console.log(`[MOCK] Update channel topic with: ${userIds}`);
       return Promise.resolve();
     };
   }
@@ -390,22 +442,23 @@ async function forceSprintTransition(newSprintIndex, mockNotifications = true) {
     
     // Get the new sprint users
     const newRoles = await getSprintUsers(newSprintIndex);
+
+    // Notify old roles (deduplicated)
+    await dedupedNotifyUsers(
+      rolesToArray(oldRoles),
+      "Your triage rotation is now complete. Thank you!"
+    );
     
-    // Notify old roles
-    for (let userId of rolesToArray(oldRoles)) {
-      if (userId) {
-        await require('./slackNotifier').notifyUser(userId, "Your triage rotation is now complete. Thank you!");
-      }
-    }
-    
-    // Notify new roles
-    for (let userId of rolesToArray(newRoles)) {
-      await require('./slackNotifier').notifyUser(userId, "You are now on triage duty. Good luck!");
-    }
-    
-    // Update Slack group and topic
-    await require('./slackNotifier').updateOnCallUserGroup(rolesToArray(newRoles));
-    await require('./slackNotifier').updateChannelTopic(rolesToArray(newRoles));
+    // Notify new roles (deduplicated)
+    await dedupedNotifyUsers(
+      rolesToArray(newRoles),
+      "You are now on triage duty. Good luck!"
+    );
+
+    // Update Slack group and topic with deduplicated user list
+    const newUserArray = rolesToArray(newRoles);
+    await require('./slackNotifier').updateOnCallUserGroup(newUserArray);
+    await require('./slackNotifier').updateChannelTopic(newUserArray);
     
     // Update currentState and persist
     currentState = {
@@ -441,7 +494,6 @@ async function forceSprintTransition(newSprintIndex, mockNotifications = true) {
     }
   }
 }
-
 
 /**
  * getCurrentState: returns the in-memory currentState.

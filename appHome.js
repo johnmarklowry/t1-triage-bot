@@ -1,5 +1,6 @@
 /********************************
  * appHome.js
+ * Updated to ensure consistent data handling
  ********************************/
 require('dotenv').config();
 const { App, ExpressReceiver } = require('@slack/bolt');
@@ -14,6 +15,7 @@ const {
   readDisciplines,
   loadJSON,
   getSprintUsers,
+  refreshCurrentState,
   OVERRIDES_FILE
 } = require('./dataUtils');
 
@@ -37,47 +39,34 @@ function getUpcomingSprints() {
  * getOnCallForSprint:
  * For a given sprint index and role, determine the on-call user from disciplines.
  * Checks if an approved override exists in overrides.json and, if so, returns that user.
+ * This is now just a wrapper around the centralized getSprintUsers function
  */
 function getOnCallForSprint(sprintIndex, role, disciplines) {
-  // Load overrides from overrides.json
-  let overrides = [];
-  try {
-    const data = loadJSON(OVERRIDES_FILE);
-    overrides = data || [];
-  } catch (err) {
-    console.error("Error loading overrides:", err);
-  }
+  const users = getSprintUsers(sprintIndex);
+  const userId = users[role];
   
-  // Check for an approved override for this sprint and role.
-  const override = overrides.find(o =>
-    o.sprintIndex === sprintIndex &&
-    o.role === role &&
-    o.approved === true
-  );
-  if (override) {
-    // Look up the replacement's details from disciplines.json.
-    const roleArray = disciplines[role] || [];
-    const replacement = roleArray.find(u => u.slackId === override.newSlackId);
-    if (replacement) {
-      return replacement; // returns an object { name, slackId }
-    } else {
-      // Fallback: return an object with the override's Slack ID.
-      return { slackId: override.newSlackId, name: override.newSlackId };
-    }
-  }
-  
-  // No override found; use default rotation logic.
+  // Find the user details from disciplines
   const roleArray = disciplines[role] || [];
-  if (roleArray.length === 0) return null;
-  const idx = sprintIndex % roleArray.length;
-  return roleArray[idx];
+  const userObj = roleArray.find(u => u.slackId === userId);
+  
+  if (userObj) {
+    return userObj;
+  } else if (userId) {
+    // Fallback: return an object with just the Slack ID
+    return { slackId: userId, name: userId };
+  }
+  
+  return null;
 }
 
 /**
  * Get the current on-call rotation.
- * Reads currentState.json and sprints.json, then enriches stored Slack IDs with names from disciplines.json.
+ * Now ensures consistency by refreshing state if needed
  */
 function getCurrentOnCall() {
+  // First, refresh the current state to ensure it matches calculations
+  refreshCurrentState();
+  
   const currentState = readCurrentState();
   const sprints = readSprints();
   const disciplines = readDisciplines();
@@ -85,7 +74,13 @@ function getCurrentOnCall() {
   if (currentState.sprintIndex === null || sprints.length === 0) {
     return null;
   }
+  
   const curSprint = sprints[currentState.sprintIndex];
+  if (!curSprint) {
+    console.error('[getCurrentOnCall] Sprint not found for index:', currentState.sprintIndex);
+    return null;
+  }
+  
   let users = [];
   for (let role of ["account", "producer", "po", "uiEng", "beEng"]) {
     const roleArray = disciplines[role] || [];
@@ -95,9 +90,18 @@ function getCurrentOnCall() {
       users.push({ role, name: userObj.name, slackId: userObj.slackId });
     } else if (currentState[role]) {
       // Fallback: use the stored Slack ID as both name and slackId.
+      console.warn(`[getCurrentOnCall] User ${currentState[role]} not found in ${role} discipline`);
       users.push({ role, name: currentState[role], slackId: currentState[role] });
     }
   }
+  
+  // Validate no duplicate users
+  const userIds = users.map(u => u.slackId);
+  const uniqueIds = new Set(userIds);
+  if (userIds.length !== uniqueIds.size) {
+    console.error('[getCurrentOnCall] WARNING: Duplicate users detected:', users);
+  }
+  
   return {
     sprintName: curSprint.sprintName,
     startDate: curSprint.startDate,
@@ -108,7 +112,7 @@ function getCurrentOnCall() {
 
 /**
  * Get the next on-call rotation.
- * Uses the next sprint index and computes on-call for each discipline.
+ * Uses the centralized getSprintUsers for consistency
  */
 function getNextOnCall() {
   const currentState = readCurrentState();
@@ -118,19 +122,33 @@ function getNextOnCall() {
   if (currentState.sprintIndex === null) {
     return null;
   }
+  
   const nextIndex = currentState.sprintIndex + 1;
   if (nextIndex >= sprints.length) {
     return null;
   }
+  
   const nextSprint = sprints[nextIndex];
+  
+  // Use centralized function to get users for the next sprint
+  const sprintUsers = getSprintUsers(nextIndex);
+  
   let users = [];
   for (let role of ["account", "producer", "po", "uiEng", "beEng"]) {
+    const userId = sprintUsers[role];
+    if (!userId) continue;
+    
     const roleArray = disciplines[role] || [];
-    if (roleArray.length === 0) continue;
-    const idx = nextIndex % roleArray.length;
-    const userObj = roleArray[idx];
-    users.push({ role, name: userObj.name, slackId: userObj.slackId });
+    const userObj = roleArray.find(u => u.slackId === userId);
+    
+    if (userObj) {
+      users.push({ role, name: userObj.name, slackId: userObj.slackId });
+    } else {
+      console.warn(`[getNextOnCall] User ${userId} not found in ${role} discipline`);
+      users.push({ role, name: userId, slackId: userId });
+    }
   }
+  
   return {
     sprintName: nextSprint.sprintName,
     startDate: nextSprint.startDate,
@@ -208,10 +226,18 @@ function formatCurrentText(cur) {
   
   let text = '*Current On-Call Rotation*\n';
   text += `*${cur.sprintName}*\nDates: ${startFormatted} to ${endFormatted}\n\n`;
-  cur.users.forEach(u => {
+  
+  // Sort users by role order for consistent display
+  const roleOrder = ['account', 'producer', 'po', 'uiEng', 'beEng'];
+  const sortedUsers = cur.users.sort((a, b) => {
+    return roleOrder.indexOf(a.role) - roleOrder.indexOf(b.role);
+  });
+  
+  sortedUsers.forEach(u => {
     const displayRole = ROLE_DISPLAY[u.role] || u.role;
     text += `*${displayRole}*: ${u.name} (<@${u.slackId}>)\n`;
   });
+  
   return text;
 }
 
@@ -227,10 +253,18 @@ function formatNextText(nxt) {
   
   let text = '*Next On-Call Rotation*\n';
   text += `*${nxt.sprintName}*\nDates: ${startFormatted} to ${endFormatted}\n\n`;
-  nxt.users.forEach(u => {
+  
+  // Sort users by role order for consistent display
+  const roleOrder = ['account', 'producer', 'po', 'uiEng', 'beEng'];
+  const sortedUsers = nxt.users.sort((a, b) => {
+    return roleOrder.indexOf(a.role) - roleOrder.indexOf(b.role);
+  });
+  
+  sortedUsers.forEach(u => {
     const displayRole = ROLE_DISPLAY[u.role] || u.role;
     text += `*${displayRole}*: ${u.name} (<@${u.slackId}>)\n`;
   });
+  
   return text;
 }
 
@@ -241,20 +275,25 @@ function formatNextText(nxt) {
 function formatDisciplines(discObj) {
   if (!discObj) return '_No discipline data available._';
   let text = '*Discipline Rotation Lists*\n';
-  Object.keys(discObj).forEach(role => {
+  
+  const roleOrder = ['account', 'producer', 'po', 'uiEng', 'beEng'];
+  
+  roleOrder.forEach(role => {
+    if (!discObj[role]) return;
+    
     const displayRole = ROLE_DISPLAY[role] || role;
     text += `\n*${displayRole}*\n`;
     discObj[role].forEach(u => {
       text += `    ${u.name} (<@${u.slackId}>)\n`;
     });
   });
+  
   return text;
 }
 
 /**
  * buildUpcomingSprintsModal:
- * Builds a modal view that lists upcoming sprints with their on-call rotations,
- * starting from the current sprint index (from currentState.json) to the end of sprints.json.
+ * Builds a modal view that lists upcoming sprints with their on-call rotations
  */
 function buildUpcomingSprintsModal() {
   // Load data from JSON files
@@ -285,42 +324,33 @@ function buildUpcomingSprintsModal() {
     { type: "divider" }
   ];
 
-  // Define display labels for roles
-  const ROLE_DISPLAY_LOCAL = {
-    account: "Account",
-    producer: "Producer",
-    po: "PO",
-    uiEng: "UI Engineer",
-    beEng: "BE Engineer"
-  };
-
   // For each upcoming sprint, compute the actual sprint index in the full sprints array.
   upcomingSprints.forEach((sprint, i) => {
-  const actualIndex = startingIndex + i;
-  // Format dates properly by adding T00:00:00 to ensure they're interpreted as midnight PT
-  const startFormatted = dayjs(`${sprint.startDate}T00:00:00-07:00`).format('ddd MM/DD/YYYY');
-  const endFormatted = dayjs(`${sprint.endDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
-  
-  let rotationText = "";
-  ["account", "producer", "po", "uiEng", "beEng"].forEach(role => {
-    const user = getOnCallForSprint(actualIndex, role, disciplines);
-    const displayRole = ROLE_DISPLAY_LOCAL[role] || role;
-    if (user) {
-      rotationText += `*${displayRole}*: ${user.name} (<@${user.slackId}>)\n`;
-    } else {
-      rotationText += `*${displayRole}*: _Unassigned_\n`;
-    }
-  });
+    const actualIndex = startingIndex + i;
+    // Format dates properly by adding T00:00:00 to ensure they're interpreted as midnight PT
+    const startFormatted = dayjs(`${sprint.startDate}T00:00:00-07:00`).format('ddd MM/DD/YYYY');
+    const endFormatted = dayjs(`${sprint.endDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
+    
+    let rotationText = "";
+    ["account", "producer", "po", "uiEng", "beEng"].forEach(role => {
+      const user = getOnCallForSprint(actualIndex, role, disciplines);
+      const displayRole = ROLE_DISPLAY[role] || role;
+      if (user) {
+        rotationText += `*${displayRole}*: ${user.name} (<@${user.slackId}>)\n`;
+      } else {
+        rotationText += `*${displayRole}*: _Unassigned_\n`;
+      }
+    });
 
-  blocks.push({
-    type: "section",
-    text: {
-      type: "mrkdwn",
-      text: `*${sprint.sprintName}*\nDates: ${startFormatted} to ${endFormatted}\n${rotationText}`
-    }
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `*${sprint.sprintName}*\nDates: ${startFormatted} to ${endFormatted}\n${rotationText}`
+      }
+    });
+    blocks.push({ type: "divider" });
   });
-  blocks.push({ type: "divider" });
-});
 
   return {
     type: "modal",

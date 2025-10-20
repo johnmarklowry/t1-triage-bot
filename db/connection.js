@@ -1,6 +1,7 @@
 /**
  * db/connection.js
  * Database connection management with connection pooling
+ * Supports Railway DATABASE_URL format and individual environment variables
  */
 const { Pool } = require('pg');
 require('dotenv').config();
@@ -8,21 +9,42 @@ require('dotenv').config();
 let pool = null;
 
 /**
- * Get or create the database connection pool
+ * Parse DATABASE_URL or build config from individual environment variables
  */
-function getPool() {
-  if (!pool) {
-    const config = {
-      host: process.env.DB_HOST || 'localhost',
-      port: process.env.DB_PORT || 5432,
-      database: process.env.DB_NAME || 'triage_bot',
-      user: process.env.DB_USER || 'postgres',
-      password: process.env.DB_PASSWORD || '',
+function getDatabaseConfig() {
+  // Check if DATABASE_URL is provided (Railway convention)
+  if (process.env.DATABASE_URL) {
+    console.log('[DB] Using DATABASE_URL from environment');
+    return {
+      connectionString: process.env.DATABASE_URL,
       max: parseInt(process.env.DB_MAX_CONNECTIONS) || 20,
       min: parseInt(process.env.DB_MIN_CONNECTIONS) || 2,
       idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000,
       connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 2000,
     };
+  }
+
+  // Fallback to individual environment variables (for local development)
+  console.log('[DB] Using individual database environment variables');
+  return {
+    host: process.env.DB_HOST || 'localhost',
+    port: process.env.DB_PORT || 5432,
+    database: process.env.DB_NAME || 'triage_bot',
+    user: process.env.DB_USER || 'postgres',
+    password: process.env.DB_PASSWORD || '',
+    max: parseInt(process.env.DB_MAX_CONNECTIONS) || 20,
+    min: parseInt(process.env.DB_MIN_CONNECTIONS) || 2,
+    idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000,
+    connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 2000,
+  };
+}
+
+/**
+ * Get or create the database connection pool
+ */
+function getPool() {
+  if (!pool) {
+    const config = getDatabaseConfig();
 
     pool = new Pool(config);
 
@@ -31,14 +53,19 @@ function getPool() {
       console.error('Unexpected error on idle client', err);
     });
 
-    console.log(`[DB] Connection pool created with config:`, {
-      host: config.host,
-      port: config.port,
-      database: config.database,
-      user: config.user,
-      max: config.max,
-      min: config.min
-    });
+    // Log connection info (without sensitive data)
+    if (config.connectionString) {
+      console.log(`[DB] Connection pool created using DATABASE_URL`);
+    } else {
+      console.log(`[DB] Connection pool created with config:`, {
+        host: config.host,
+        port: config.port,
+        database: config.database,
+        user: config.user,
+        max: config.max,
+        min: config.min
+      });
+    }
   }
 
   return pool;

@@ -13,7 +13,7 @@ The Triage Rotation Bot is a Slack-based automation system that manages on-call 
 
 ## Tech Stack
 
-- **Runtime**: Node.js 16.x
+- **Runtime**: Node.js 18+
 - **Framework**: Express.js with Slack Bolt framework
 - **Database**: PostgreSQL with pg-pool for connection management
 - **Data Storage**: JSON files (legacy) + PostgreSQL (current)

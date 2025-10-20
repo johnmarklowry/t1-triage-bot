@@ -1,5 +1,6 @@
 /********************************
  * overrideHandler.js
+ * Updated to use PostgreSQL database with transaction support
  ********************************/
 require('dotenv').config();
 const fs = require('fs');
@@ -7,12 +8,19 @@ const path = require('path');
 const { slackApp, receiver } = require('./appHome');
 const { buildOverrideRequestModal } = require('./overrideModal');
 
-// Path to JSON data
+// Import database repositories
+const { UsersRepository, OverridesRepository } = require('./db/repository');
+
+// Path to JSON data (kept for fallback)
 const OVERRIDES_FILE = path.join(__dirname, 'overrides.json');
 const DISCIPLINES_FILE = path.join(__dirname, 'disciplines.json');
 
+// Configuration
+const USE_DATABASE = process.env.USE_DATABASE !== 'false';
+const DUAL_WRITE_MODE = process.env.DUAL_WRITE_MODE !== 'false';
+
 /* =========================
-   Helpers
+   Helpers (Legacy support)
    ========================= */
 function loadOverrides() {
   try {
@@ -42,19 +50,237 @@ function getDisciplines() {
   }
 }
 
-function getUserRole(userId) {
-  const disciplines = getDisciplines();
-  for (const role in disciplines) {
-    const list = disciplines[role];
-    if (Array.isArray(list)) {
-      for (const userObj of list) {
-        if (userObj.slackId === userId) {
-          return role;
+/* =========================
+   Database Helpers
+   ========================= */
+async function getUserRole(userId) {
+  if (!USE_DATABASE) {
+    const disciplines = getDisciplines();
+    for (const role in disciplines) {
+      const list = disciplines[role];
+      if (Array.isArray(list)) {
+        for (const userObj of list) {
+          if (userObj.slackId === userId) {
+            return role;
+          }
         }
       }
     }
+    return null;
   }
-  return null;
+
+  try {
+    const disciplines = await UsersRepository.getDisciplines();
+    for (const role in disciplines) {
+      const users = disciplines[role];
+      if (Array.isArray(users)) {
+        for (const user of users) {
+          if (user.slackId === userId) {
+            return role;
+          }
+        }
+      }
+    }
+    return null;
+  } catch (error) {
+    console.error('[getUserRole] Database error:', error);
+    // Fallback to JSON
+    const disciplines = getDisciplines();
+    for (const role in disciplines) {
+      const list = disciplines[role];
+      if (Array.isArray(list)) {
+        for (const userObj of list) {
+          if (userObj.slackId === userId) {
+            return role;
+          }
+        }
+      }
+    }
+    return null;
+  }
+}
+
+async function addOverrideRequest(overrideData) {
+  if (!USE_DATABASE) {
+    let overrides = loadOverrides();
+    if (!Array.isArray(overrides)) {
+      overrides = [];
+    }
+    overrides.push(overrideData);
+    saveOverrides(overrides);
+    return true;
+  }
+
+  try {
+    await OverridesRepository.addOverride(overrideData, overrideData.requestedBy);
+    
+    // Dual-write to JSON if enabled
+    if (DUAL_WRITE_MODE) {
+      let overrides = loadOverrides();
+      if (!Array.isArray(overrides)) {
+        overrides = [];
+      }
+      overrides.push(overrideData);
+      saveOverrides(overrides);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('[addOverrideRequest] Database error:', error);
+    // Fallback to JSON
+    let overrides = loadOverrides();
+    if (!Array.isArray(overrides)) {
+      overrides = [];
+    }
+    overrides.push(overrideData);
+    saveOverrides(overrides);
+    return true;
+  }
+}
+
+async function approveOverride(sprintIndex, role, requestedBy, replacementSlackId, approvedBy) {
+  if (!USE_DATABASE) {
+    let overrides = loadOverrides();
+    const idx = overrides.findIndex(o =>
+      o.sprintIndex === sprintIndex &&
+      o.role === role &&
+      o.requestedBy === requestedBy &&
+      o.newSlackId === replacementSlackId &&
+      o.approved === false
+    );
+    
+    if (idx > -1) {
+      overrides[idx].approved = true;
+      overrides[idx].approvedBy = approvedBy;
+      overrides[idx].approvalTimestamp = new Date().toISOString();
+      saveOverrides(overrides);
+      return overrides[idx];
+    }
+    return null;
+  }
+
+  try {
+    const result = await OverridesRepository.approveOverride(
+      sprintIndex, role, requestedBy, replacementSlackId, approvedBy
+    );
+    
+    // Dual-write to JSON if enabled
+    if (DUAL_WRITE_MODE && result) {
+      let overrides = loadOverrides();
+      const idx = overrides.findIndex(o =>
+        o.sprintIndex === sprintIndex &&
+        o.role === role &&
+        o.requestedBy === requestedBy &&
+        o.newSlackId === replacementSlackId &&
+        o.approved === false
+      );
+      
+      if (idx > -1) {
+        overrides[idx].approved = true;
+        overrides[idx].approvedBy = approvedBy;
+        overrides[idx].approvalTimestamp = new Date().toISOString();
+        saveOverrides(overrides);
+      }
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('[approveOverride] Database error:', error);
+    // Fallback to JSON
+    let overrides = loadOverrides();
+    const idx = overrides.findIndex(o =>
+      o.sprintIndex === sprintIndex &&
+      o.role === role &&
+      o.requestedBy === requestedBy &&
+      o.newSlackId === replacementSlackId &&
+      o.approved === false
+    );
+    
+    if (idx > -1) {
+      overrides[idx].approved = true;
+      overrides[idx].approvedBy = approvedBy;
+      overrides[idx].approvalTimestamp = new Date().toISOString();
+      saveOverrides(overrides);
+      return overrides[idx];
+    }
+    return null;
+  }
+}
+
+async function declineOverride(sprintIndex, role, requestedBy, replacementSlackId, declinedBy) {
+  if (!USE_DATABASE) {
+    let overrides = loadOverrides();
+    overrides = overrides.filter(o =>
+      !(o.sprintIndex === sprintIndex &&
+        o.role === role &&
+        o.requestedBy === requestedBy &&
+        o.newSlackId === replacementSlackId &&
+        o.approved === false)
+    );
+    saveOverrides(overrides);
+    return true;
+  }
+
+  try {
+    const result = await OverridesRepository.declineOverride(
+      sprintIndex, role, requestedBy, replacementSlackId, declinedBy
+    );
+    
+    // Dual-write to JSON if enabled
+    if (DUAL_WRITE_MODE) {
+      let overrides = loadOverrides();
+      overrides = overrides.filter(o =>
+        !(o.sprintIndex === sprintIndex &&
+          o.role === role &&
+          o.requestedBy === requestedBy &&
+          o.newSlackId === replacementSlackId &&
+          o.approved === false)
+      );
+      saveOverrides(overrides);
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('[declineOverride] Database error:', error);
+    // Fallback to JSON
+    let overrides = loadOverrides();
+    overrides = overrides.filter(o =>
+      !(o.sprintIndex === sprintIndex &&
+        o.role === role &&
+        o.requestedBy === requestedBy &&
+        o.newSlackId === replacementSlackId &&
+        o.approved === false)
+    );
+    saveOverrides(overrides);
+    return true;
+  }
+}
+
+async function getAllOverrides() {
+  if (!USE_DATABASE) {
+    return loadOverrides();
+  }
+
+  try {
+    const overrides = await OverridesRepository.getAll();
+    return overrides.map(override => ({
+      id: override.id,
+      sprintIndex: override.sprintIndex,
+      role: override.role,
+      originalSlackId: override.originalSlackId,
+      newSlackId: override.newSlackId,
+      newName: override.newName,
+      requestedBy: override.requestedBy,
+      approved: override.approved,
+      approvedBy: override.approvedBy,
+      approvalTimestamp: override.approvalTimestamp,
+      timestamp: override.timestamp
+    }));
+  } catch (error) {
+    console.error('[getAllOverrides] Database error:', error);
+    // Fallback to JSON
+    return loadOverrides();
+  }
 }
 
 /* =========================
@@ -65,7 +291,7 @@ slackApp.command('/triage-override', async ({ command, ack, client, logger }) =>
   await ack();
 
   // Determine user's role
-  const userRole = getUserRole(command.user_id);
+  const userRole = await getUserRole(command.user_id);
   // Build the modal for requesting an override
   const modalView = buildOverrideRequestModal(command.user_id);
   try {
@@ -116,7 +342,7 @@ slackApp.view('override_request_modal', async ({ ack, body, view, client, logger
     const replacementSlackId = view.state.values.replacement.replacement_select.selected_option.value;
 
     // Look up replacement name from disciplines
-    const disciplines = getDisciplines();
+    const disciplines = USE_DATABASE ? await UsersRepository.getDisciplines() : getDisciplines();
     const roleList = disciplines[requesterRole] || [];
     let replacementName = replacementSlackId;
     const replacementObj = roleList.find(u => u.slackId === replacementSlackId);
@@ -135,13 +361,8 @@ slackApp.view('override_request_modal', async ({ ack, body, view, client, logger
       timestamp: new Date().toISOString()
     };
 
-    // Save override
-    let overrides = loadOverrides();
-    if (!Array.isArray(overrides)) {
-      overrides = [];
-    }
-    overrides.push(override);
-    saveOverrides(overrides);
+    // Save override using database or JSON
+    await addOverrideRequest(override);
 
     // Notify admin channel with Approve/Decline buttons
     await client.chat.postMessage({
@@ -200,21 +421,16 @@ slackApp.action('approve_override', async ({ ack, body, client, logger }) => {
   await ack();
   try {
     const overrideInfo = JSON.parse(body.actions[0].value);
-    let overrides = loadOverrides();
-    // Find matching override
-    const idx = overrides.findIndex(o =>
-      o.sprintIndex === overrideInfo.sprintIndex &&
-      o.role === overrideInfo.role &&
-      o.requestedBy === overrideInfo.requesterId &&
-      o.newSlackId === overrideInfo.replacementSlackId &&
-      o.approved === false
+    
+    const result = await approveOverride(
+      overrideInfo.sprintIndex,
+      overrideInfo.role,
+      overrideInfo.requesterId,
+      overrideInfo.replacementSlackId,
+      body.user.id
     );
-    if (idx > -1) {
-      overrides[idx].approved = true;
-      overrides[idx].approvedBy = body.user.id;
-      overrides[idx].approvalTimestamp = new Date().toISOString();
-      saveOverrides(overrides);
-
+    
+    if (result) {
       // Notify the requester and replacement
       await client.chat.postMessage({
         channel: overrideInfo.requesterId,
@@ -224,6 +440,7 @@ slackApp.action('approve_override', async ({ ack, body, client, logger }) => {
         channel: overrideInfo.replacementSlackId,
         text: `You have been approved as the replacement for ${overrideInfo.role} on sprint index ${overrideInfo.sprintIndex}.`
       });
+      
       // Update the admin channel message
       await client.chat.update({
         channel: body.channel.id,
@@ -239,7 +456,7 @@ slackApp.action('approve_override', async ({ ack, body, client, logger }) => {
                      `*Role:* ${overrideInfo.role}\n` +
                      `*Requested By:* <@${overrideInfo.requesterId}>\n` +
                      `*Replacement:* <@${overrideInfo.replacementSlackId}> (${overrideInfo.replacementName || overrideInfo.replacementSlackId})\n` +
-                     `*Approved By:* <@${body.user.id}> at ${overrides[idx].approvalTimestamp}\n`
+                     `*Approved By:* <@${body.user.id}> at ${result.approvalTimestamp || new Date().toISOString()}\n`
             }
           }
         ]
@@ -258,42 +475,43 @@ slackApp.action('decline_override', async ({ ack, body, client, logger }) => {
   await ack();
   try {
     const overrideInfo = JSON.parse(body.actions[0].value);
-    let overrides = loadOverrides();
-    // Remove the matching override
-    overrides = overrides.filter(o =>
-      !(o.sprintIndex === overrideInfo.sprintIndex &&
-        o.role === overrideInfo.role &&
-        o.requestedBy === overrideInfo.requesterId &&
-        o.newSlackId === overrideInfo.replacementSlackId &&
-        o.approved === false)
+    
+    const result = await declineOverride(
+      overrideInfo.sprintIndex,
+      overrideInfo.role,
+      overrideInfo.requesterId,
+      overrideInfo.replacementSlackId,
+      body.user.id
     );
-    saveOverrides(overrides);
-
-    // Notify the requester
-    await client.chat.postMessage({
-      channel: overrideInfo.requesterId,
-      text: `Your override request for ${overrideInfo.role} on sprint index ${overrideInfo.sprintIndex} has been declined.`
-    });
-    // Update the admin channel message
-    await client.chat.update({
-      channel: body.channel.id,
-      ts: body.message.ts,
-      text: "Override Declined (Details in blocks)",
-      blocks: [
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `:x: *Override Declined*\n` +
-                   `*Sprint Index:* ${overrideInfo.sprintIndex}\n` +
-                   `*Role:* ${overrideInfo.role}\n` +
-                   `*Requested By:* <@${overrideInfo.requesterId}>\n` +
-                   `*Replacement:* <@${overrideInfo.replacementSlackId}>\n` +
-                   `*Declined By:* <@${body.user.id}> at ${new Date().toISOString()}\n`
+    
+    if (result) {
+      // Notify the requester
+      await client.chat.postMessage({
+        channel: overrideInfo.requesterId,
+        text: `Your override request for ${overrideInfo.role} on sprint index ${overrideInfo.sprintIndex} has been declined.`
+      });
+      
+      // Update the admin channel message
+      await client.chat.update({
+        channel: body.channel.id,
+        ts: body.message.ts,
+        text: "Override Declined (Details in blocks)",
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `:x: *Override Declined*\n` +
+                     `*Sprint Index:* ${overrideInfo.sprintIndex}\n` +
+                     `*Role:* ${overrideInfo.role}\n` +
+                     `*Requested By:* <@${overrideInfo.requesterId}>\n` +
+                     `*Replacement:* <@${overrideInfo.replacementSlackId}>\n` +
+                     `*Declined By:* <@${body.user.id}> at ${new Date().toISOString()}\n`
+            }
           }
-        }
-      ]
-    });
+        ]
+      });
+    }
   } catch (error) {
     logger.error("Error declining override:", error);
   }
@@ -317,8 +535,9 @@ slackApp.command('/override-list', async ({ command, ack, client, logger }) => {
       });
       return;
     }
+    
     // Build and open the modal
-    const overrides = loadOverrides();
+    const overrides = await getAllOverrides();
     const modalView = buildOverrideListModal(overrides);
     await client.views.open({
       trigger_id: command.trigger_id,
@@ -390,13 +609,35 @@ slackApp.action('admin_remove_override', async ({ ack, body, client, logger }) =
   await ack();
   try {
     const { index } = JSON.parse(body.actions[0].value);
-    let overrides = loadOverrides();
+    const overrides = await getAllOverrides();
+    
     if (index < 0 || index >= overrides.length) {
       logger.error("Invalid override index:", index);
       return;
     }
-    const removed = overrides.splice(index, 1)[0];
-    saveOverrides(overrides);
+    
+    const removed = overrides[index];
+    
+    // Remove from database or JSON
+    if (USE_DATABASE) {
+      try {
+        await OverridesRepository.declineOverride(
+          removed.sprintIndex,
+          removed.role,
+          removed.requestedBy,
+          removed.newSlackId,
+          body.user.id
+        );
+      } catch (error) {
+        console.error('[admin_remove_override] Database error:', error);
+        // Fallback to JSON removal
+        overrides.splice(index, 1);
+        saveOverrides(overrides);
+      }
+    } else {
+      overrides.splice(index, 1);
+      saveOverrides(overrides);
+    }
 
     // Optionally notify the parties that the override was forcibly removed
     await client.chat.postMessage({
@@ -409,7 +650,8 @@ slackApp.action('admin_remove_override', async ({ ack, body, client, logger }) =
     });
 
     // Refresh the modal
-    const updatedView = buildOverrideListModal(overrides);
+    const updatedOverrides = await getAllOverrides();
+    const updatedView = buildOverrideListModal(updatedOverrides);
     await client.views.update({
       view_id: body.view.id,
       view: updatedView

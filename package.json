@@ -4,7 +4,10 @@
   "description": "A Slack-based triage rotation system with Google Sheets",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "migrate": "node -e \"require('./db/migrate').runMigrations().then(() => process.exit(0))\"",
+    "migrate-data": "node db/migrate-json-data.js",
+    "db-status": "node -e \"require('./db/migrate').getMigrationStatus().then(status => { console.log(JSON.stringify(status, null, 2)); process.exit(0); })\""
   },
   "dependencies": {
     "@fastify/formbody": "^7.4.0",
@@ -19,7 +22,9 @@
     "googleapis": "^118.0.0",
     "handlebars": "^4.7.8",
     "node-cron": "^3.0.2",
-    "openai": "^4.24.1"
+    "openai": "^4.24.1",
+    "pg": "^8.11.3",
+    "pg-pool": "^3.6.1"
   },
   "engines": {
     "node": "16.x"

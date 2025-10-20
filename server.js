@@ -19,6 +19,7 @@ const { slackApp, receiver } = require('./appHome');
 // Import database modules
 const { testConnection, getHealthStatus } = require('./db/connection');
 const { runMigrations } = require('./db/migrate');
+const { setupDatabase } = require('./setup-database');
 
 const app = express();
 
@@ -57,15 +58,15 @@ async function initializeServer() {
   try {
     console.log('[SERVER] Initializing database...');
     
+    // Run full database setup (migrations + data migration)
+    await setupDatabase();
+    console.log('[SERVER] Database setup completed');
+    
     // Test database connection
     const connected = await testConnection();
     if (!connected) {
       console.error('[SERVER] Database connection failed, but continuing with fallback to JSON files');
     }
-    
-    // Run migrations
-    await runMigrations();
-    console.log('[SERVER] Database migrations completed');
     
     // Start the combined server on process.env.PORT (Glitch uses this port)
     const port = process.env.PORT || 3000;

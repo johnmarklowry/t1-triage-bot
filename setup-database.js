@@ -47,14 +47,9 @@ async function setupDatabase() {
   } catch (error) {
     console.error('[SETUP] Database setup failed:', error);
     
-    // In Railway, we want to fail fast if database setup fails
-    if (isRailway) {
-      console.error('[SETUP] Railway deployment failed due to database setup error');
-      process.exit(1);
-    } else {
-      console.error('[SETUP] Local setup failed, but continuing...');
-      // Don't exit in local development
-    }
+    // Always continue - let the server handle graceful degradation
+    console.error('[SETUP] Continuing with JSON fallback mode...');
+    // Don't exit - let the application start with fallback
   }
 }
 

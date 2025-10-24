@@ -52,17 +52,15 @@ function isRetryableError(error) {
  * Enhanced audit logging helper with retry
  */
 async function logAudit(tableName, recordId, operation, oldValues, newValues, changedBy, reason) {
-  return await withRetry(async () => {
-    try {
-      await query(`
-        INSERT INTO audit_logs (table_name, record_id, operation, old_values, new_values, changed_by, reason)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-      `, [tableName, recordId, operation, oldValues, newValues, changedBy, reason]);
-    } catch (error) {
-      console.error('[AUDIT] Failed to log audit:', error);
-      // Don't throw - audit failures shouldn't break the main operation
-    }
-  }, 2, `Audit logging for ${tableName}`);
+  try {
+    await query(`
+      INSERT INTO audit_logs (table_name, record_id, operation, old_values, new_values, changed_by, reason)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [tableName, recordId, operation, oldValues, newValues, changedBy, reason]);
+  } catch (error) {
+    console.error('[AUDIT] Failed to log audit:', error);
+    // Don't throw - audit failures shouldn't break the main operation
+  }
 }
 
 /**

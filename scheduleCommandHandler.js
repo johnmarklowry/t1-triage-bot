@@ -185,7 +185,7 @@ slackApp.view('schedule_date_modal', async ({ ack, body, view, client, logger })
       await client.chat.postEphemeral({
         channel: body.user.id,
         user: body.user.id,
-        text: "Please select a future date. Past dates are not allowed."
+        text: "Please select today or a future date. Past dates are not allowed."
       });
       return;
     }

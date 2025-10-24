@@ -3,7 +3,6 @@
  * Handles admin slash commands for managing sprints and disciplines
  */
 // const fs = require('fs'); // Unused - keeping for potential future use
-// const path = require('path'); // Unused - keeping for potential future use
 const { slackApp } = require('./appHome');
 const { getEnvironmentCommand } = require('./commandUtils');
 const { 

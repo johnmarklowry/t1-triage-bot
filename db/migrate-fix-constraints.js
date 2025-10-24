@@ -36,7 +36,12 @@ async function runConstraintFixes() {
         } catch (error) {
           console.error(`❌ Error executing statement ${i + 1}:`, error.message);
           // Continue with other statements unless it's a critical error
-          if (error.message.includes('does not exist')) {
+          // Check for PostgreSQL undefined_object error code or specific error message patterns
+          if (
+            (error.code && error.code === '42704') ||
+            /constraint ".*" of relation ".*" does not exist/.test(error.message) ||
+            /index ".*" does not exist/.test(error.message)
+          ) {
             console.log('⚠️  Skipping statement (constraint/index does not exist)');
           } else {
             throw error;

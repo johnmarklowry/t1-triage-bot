@@ -7,10 +7,12 @@ According to the TODO.md, this is the last remaining feature to complete the cor
 ## What Changes
 
 - Add `/triage-schedule` slash command that allows users to query who will be on call on a specific date
+- Create environment-specific command naming (appends `-staging` when `ENVIRONMENT=staging` or `APP_ENV=staging`)
 - Create a modal interface for date selection and display of scheduled on-call assignments
 - Implement date-based rotation calculation logic to determine assignments for future dates
 - Add validation for date inputs (past dates, invalid dates, etc.)
 - Provide clear feedback when no assignments are found for the selected date
+- Update all existing slash commands to use environment-specific naming
 
 **BREAKING**: None - this is a new feature that doesn't modify existing functionality.
 

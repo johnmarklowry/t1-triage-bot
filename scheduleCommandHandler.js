@@ -3,6 +3,7 @@
  * Handles the /triage-schedule slash command for querying who will be on call on specific dates
  */
 const { slackApp } = require('./appHome');
+const { getEnvironmentCommand } = require('./commandUtils');
 const { 
   readSprints, 
   getSprintUsers,
@@ -124,9 +125,9 @@ function buildScheduleModal(date, sprint, userNames) {
 }
 
 /**
- * /triage-schedule slash command handler
+ * /triage-schedule slash command handler (environment-specific)
  */
-slackApp.command('/triage-schedule', async ({ command, ack, client, logger }) => {
+slackApp.command(getEnvironmentCommand('triage-schedule'), async ({ command, ack, client, logger }) => {
   await ack();
   
   try {

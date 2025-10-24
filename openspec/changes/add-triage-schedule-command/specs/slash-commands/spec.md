@@ -3,6 +3,14 @@
 ### Requirement: Triage Schedule Query Command
 The system SHALL provide a `/triage-schedule` slash command that allows users to query who will be on call on a specific date.
 
+#### Scenario: Environment-specific command naming
+- **WHEN** the system is running in staging environment (`ENVIRONMENT=staging` or `APP_ENV=staging`)
+- **THEN** the command name becomes `/triage-schedule-staging`
+
+#### Scenario: Production environment command naming
+- **WHEN** the system is running in production environment (no staging environment variables set)
+- **THEN** the command name remains `/triage-schedule`
+
 #### Scenario: User queries schedule for future date
 - **WHEN** user executes `/triage-schedule` command
 - **THEN** system opens a modal with a date picker for date selection
@@ -26,6 +34,17 @@ The system SHALL provide a `/triage-schedule` slash command that allows users to
 #### Scenario: Display assignments with discipline information
 - **WHEN** assignments are found for the selected date
 - **THEN** system displays each discipline with the assigned team member's name and Slack ID
+
+### Requirement: Environment-specific Command Naming
+The system SHALL provide environment-specific naming for all slash commands to ensure uniqueness across environments.
+
+#### Scenario: Staging environment commands
+- **WHEN** the system is running in staging environment (`ENVIRONMENT=staging` or `APP_ENV=staging`)
+- **THEN** all slash commands append `-staging` suffix (e.g., `/admin-sprints-staging`, `/triage-override-staging`)
+
+#### Scenario: Production environment commands
+- **WHEN** the system is running in production environment (no staging environment variables set)
+- **THEN** all slash commands use their base names (e.g., `/admin-sprints`, `/triage-override`)
 
 ### Requirement: Date-based Rotation Calculation
 The system SHALL calculate rotation assignments based on sprint schedules and discipline rosters for any given future date.

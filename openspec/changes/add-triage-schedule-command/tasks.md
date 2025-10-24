@@ -8,3 +8,5 @@
 - [x] 1.6 Add error handling for edge cases (no assignments, invalid dates)
 - [x] 1.7 Test the command with various date inputs
 - [x] 1.8 Update documentation and help text
+- [x] 1.9 Create environment-specific command utility
+- [x] 1.10 Update all existing slash commands to use environment-specific naming

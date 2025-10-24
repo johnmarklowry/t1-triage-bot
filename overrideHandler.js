@@ -6,6 +6,7 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { slackApp, receiver } = require('./appHome');
+const { getEnvironmentCommand } = require('./commandUtils');
 const { buildOverrideRequestModal } = require('./overrideModal');
 
 // Import database repositories
@@ -287,7 +288,7 @@ async function getAllOverrides() {
    /triage-override Command
    (User Flow)
    ========================= */
-slackApp.command('/triage-override', async ({ command, ack, client, logger }) => {
+slackApp.command(getEnvironmentCommand('triage-override'), async ({ command, ack, client, logger }) => {
   await ack();
 
   // Determine user's role
@@ -523,7 +524,7 @@ slackApp.action('decline_override', async ({ ack, body, client, logger }) => {
    with the option to remove them after the fact.
    (One might also add 'approve' if not approved.)
 ========================= */
-slackApp.command('/override-list', async ({ command, ack, client, logger }) => {
+slackApp.command(getEnvironmentCommand('override-list'), async ({ command, ack, client, logger }) => {
   await ack();
   try {
     // Check if user is in the admin channel

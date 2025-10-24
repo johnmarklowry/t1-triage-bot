@@ -2,9 +2,9 @@
  * adminCommands.js
  * Handles admin slash commands for managing sprints and disciplines
  */
-const fs = require('fs');
-const path = require('path');
+// const fs = require('fs'); // Unused - keeping for potential future use
 const { slackApp } = require('./appHome');
+const { getEnvironmentCommand } = require('./commandUtils');
 const { 
   SPRINTS_FILE, 
   DISCIPLINES_FILE,
@@ -18,7 +18,7 @@ const {
  * /admin-sprints
  * Lists all sprints and provides options to add new ones
  */
-slackApp.command('/admin-sprints', async ({ command, ack, client, logger }) => {
+slackApp.command(getEnvironmentCommand('admin-sprints'), async ({ command, ack, client, logger }) => {
   await ack();
   
   try {
@@ -209,7 +209,7 @@ slackApp.view('add_sprint_modal', async ({ ack, body, view, client, logger }) =>
  * /admin-disciplines
  * Lists all disciplines and allows managing team members
  */
-slackApp.command('/admin-disciplines', async ({ command, ack, client, logger }) => {
+slackApp.command(getEnvironmentCommand('admin-disciplines'), async ({ command, ack, client, logger }) => {
   await ack();
   
   try {

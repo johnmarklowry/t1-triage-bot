@@ -13,6 +13,9 @@ require('./overrideHandler');
 // require Bot Mention Handler for SLA assessment
 require('./botMentionHandler');
 
+// require Schedule Command Handler for date-based queries
+require('./scheduleCommandHandler');
+
 // Import our Slack Bolt app and its receiver (which is an Express app)
 const { slackApp, receiver } = require('./appHome');
 

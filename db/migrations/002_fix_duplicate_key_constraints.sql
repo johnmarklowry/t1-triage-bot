@@ -6,6 +6,7 @@
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_slack_id_key;
 
 -- Add composite unique constraint for slack_id + discipline
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_slack_discipline_unique;
 ALTER TABLE users ADD CONSTRAINT users_slack_discipline_unique 
 UNIQUE (slack_id, discipline);
 
@@ -22,7 +23,8 @@ WHERE sprint_index IS NOT NULL;
 
 -- Fix overrides table to prevent duplicate requests
 -- Add unique constraint to prevent duplicate override requests
-ALTER TABLE overrides ADD CONSTRAINT IF NOT EXISTS overrides_unique_request 
+ALTER TABLE overrides DROP CONSTRAINT IF EXISTS overrides_unique_request;
+ALTER TABLE overrides ADD CONSTRAINT overrides_unique_request 
 UNIQUE (sprint_index, role, requested_by, replacement_slack_id);
 
 -- Add index for better performance on override lookups
@@ -33,7 +35,8 @@ CREATE INDEX IF NOT EXISTS idx_overrides_unique_lookup ON overrides(sprint_index
 ALTER TABLE current_state DROP CONSTRAINT IF EXISTS unique_current_state;
 
 -- Add a proper unique constraint on the id field (should only have one record)
-ALTER TABLE current_state ADD CONSTRAINT IF NOT EXISTS current_state_single_record 
+ALTER TABLE current_state DROP CONSTRAINT IF EXISTS current_state_single_record;
+ALTER TABLE current_state ADD CONSTRAINT current_state_single_record 
 UNIQUE (id);
 
 -- Ensure we have the initial current state record if it doesn't exist

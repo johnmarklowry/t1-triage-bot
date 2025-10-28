@@ -2,6 +2,13 @@
 -- Fix database constraints to handle legitimate duplicate scenarios
 
 -- Fix users table to allow same user in multiple disciplines
+-- Remove duplicate users with same slack_id + discipline, keeping only the most recent one
+DELETE FROM users a
+USING users b
+WHERE a.id < b.id
+AND a.slack_id = b.slack_id
+AND a.discipline = b.discipline;
+
 -- Remove restrictive UNIQUE constraint on slack_id
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_slack_id_key;
 
@@ -14,6 +21,13 @@ UNIQUE (slack_id, discipline);
 CREATE INDEX IF NOT EXISTS idx_users_slack_discipline ON users(slack_id, discipline);
 
 -- Fix sprints table to handle duplicate indexes better
+-- Remove duplicate sprints with same sprint_index, keeping only the most recent one
+DELETE FROM sprints a
+USING sprints b
+WHERE a.id < b.id
+AND a.sprint_index = b.sprint_index
+AND a.sprint_index IS NOT NULL;
+
 -- Remove the strict unique constraint on sprint_index
 ALTER TABLE sprints DROP CONSTRAINT IF EXISTS sprints_sprint_index_key;
 
@@ -22,7 +36,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_sprints_active_unique ON sprints(sprint_in
 WHERE sprint_index IS NOT NULL;
 
 -- Fix overrides table to prevent duplicate requests
--- Add unique constraint to prevent duplicate override requests
+-- Remove duplicate override requests, keeping only the most recent one
+DELETE FROM overrides a
+USING overrides b
+WHERE a.id < b.id
+AND a.sprint_index = b.sprint_index
+AND a.role = b.role
+AND a.requested_by = b.requested_by
+AND a.replacement_slack_id = b.replacement_slack_id;
+
+-- Now add unique constraint to prevent duplicate override requests
 ALTER TABLE overrides DROP CONSTRAINT IF EXISTS overrides_unique_request;
 ALTER TABLE overrides ADD CONSTRAINT overrides_unique_request 
 UNIQUE (sprint_index, role, requested_by, replacement_slack_id);
@@ -31,10 +54,14 @@ UNIQUE (sprint_index, role, requested_by, replacement_slack_id);
 CREATE INDEX IF NOT EXISTS idx_overrides_unique_lookup ON overrides(sprint_index, role, requested_by, replacement_slack_id);
 
 -- Fix current_state table constraint handling
+-- Remove any rows that don't have id = 1
+DELETE FROM current_state WHERE id != 1;
+
 -- Remove the restrictive CHECK constraint that limits to id = 1
 ALTER TABLE current_state DROP CONSTRAINT IF EXISTS unique_current_state;
 
 -- Add a proper unique constraint on the id field (should only have one record)
+-- Note: id is already a PRIMARY KEY, so this is somewhat redundant but we keep it for clarity
 ALTER TABLE current_state DROP CONSTRAINT IF EXISTS current_state_single_record;
 ALTER TABLE current_state ADD CONSTRAINT current_state_single_record 
 UNIQUE (id);

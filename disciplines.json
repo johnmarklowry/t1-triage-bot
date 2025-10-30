@@ -1,36 +1,108 @@
 {
   "account": [
-    { "name": "Grayson",    "slackId": "UB1GAT2BF" },
-    { "name": "Ivy",        "slackId": "UQDSA2S80" },
-    { "name": "Melanie G",  "slackId": "U077083CQR5" },
-    { "name": "Cherie",     "slackId": "U02J1UVFSGL" },
-    { "name": "Megan",      "slackId": "U70RLDSL9" },
-    { "name": "Brittany",   "slackId": "UBAKSD3HV" }
+    {
+      "name": "Grayson",
+      "slackId": "UB1GAT2BF"
+    },
+    {
+      "name": "Ivy",
+      "slackId": "UQDSA2S80"
+    },
+    {
+      "name": "Melanie G",
+      "slackId": "U077083CQR5"
+    },
+    {
+      "name": "Cherie",
+      "slackId": "U02J1UVFSGL"
+    },
+    {
+      "name": "Stanton",
+      "slackId": "U04U1KUM9ED"
+    },
+    {
+      "name": "Shelby",
+      "slackId": "U03GJD7JSAH"
+    }
   ],
   "producer": [
-    { "name": "Mel D",      "slackId": "UDA16B09K" },
-    { "name": "Christi",    "slackId": "U48KLL410" },
-    { "name": "Shelley",    "slackId": "U02LKCXK1SP" },
-    { "name": "Matt M",     "slackId": "U081U8XP1" },
-    { "name": "Rod",        "slackId": "U0JJ77TU7" },
-    { "name": "Jake",        "slackId": "U1Q6EJUDS" }
+    {
+      "name": "Mel D",
+      "slackId": "UDA16B09K"
+    },
+    {
+      "name": "Christi",
+      "slackId": "U48KLL410"
+    },
+    {
+      "name": "Shelley",
+      "slackId": "U02LKCXK1SP"
+    },
+    {
+      "name": "Matt M",
+      "slackId": "U081U8XP1"
+    },
+    {
+      "name": "Rod",
+      "slackId": "U0JJ77TU7"
+    },
+    {
+      "name": "Jake",
+      "slackId": "U1Q6EJUDS"
+    }
   ],
   "po": [
-    { "name": "Dani",       "slackId": "U0373SK3D" },
-    { "name": "Mariana",    "slackId": "U045KH4N0QY" },
-    { "name": "John Mark",  "slackId": "UA4K27ELX" },
-    { "name": "Carlos",     "slackId": "U06H7UC8ERH" },
-    { "name": "Nate",       "slackId": "U03BLBAESRF" },
-    { "name": "Kori",       "slackId": "U029X9SQ599" }
+    {
+      "name": "Dani",
+      "slackId": "U0373SK3D"
+    },
+    {
+      "name": "Mariana",
+      "slackId": "U045KH4N0QY"
+    },
+    {
+      "name": "John Mark",
+      "slackId": "UA4K27ELX"
+    },
+    {
+      "name": "Carlos",
+      "slackId": "U06H7UC8ERH"
+    },
+    {
+      "name": "Nate",
+      "slackId": "U03BLBAESRF"
+    },
+    {
+      "name": "Kori",
+      "slackId": "U029X9SQ599"
+    }
   ],
   "uiEng": [
-    { "name": "Frank",      "slackId": "U2SKVLZPF" },
-    { "name": "Raymond",    "slackId": "U025QANMR" },
-    { "name": "Erik",    "slackId": "U08MGUU3NQY" }
+    {
+      "name": "Frank",
+      "slackId": "U2SKVLZPF"
+    },
+    {
+      "name": "Raymond",
+      "slackId": "U025QANMR"
+    },
+    {
+      "name": "Erik",
+      "slackId": "U08MGUU3NQY"
+    }
   ],
   "beEng": [
-    { "name": "Scott",      "slackId": "U070B5NMU" },
-    { "name": "Keith",      "slackId": "U02SEL0A937" },
-    { "name": "Lyle",       "slackId": "UTSQ413T6" }
+    {
+      "name": "Scott",
+      "slackId": "U070B5NMU"
+    },
+    {
+      "name": "Keith",
+      "slackId": "U02SEL0A937"
+    },
+    {
+      "name": "Lyle",
+      "slackId": "UTSQ413T6"
+    }
   ]
 }

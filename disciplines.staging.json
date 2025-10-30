@@ -1,0 +1,52 @@
+{
+    "account": [
+        {
+            "name": "Nate Lubeck",
+            "slackId": "U03BLBAESRF"
+        },
+        {
+            "name": "John Mark Lowry",
+            "slackId": "UA4K27ELX"
+        }
+    ],
+    "producer": [
+        {
+            "name": "Nate Lubeck",
+            "slackId": "U03BLBAESRF"
+        },
+        {
+            "name": "John Mark Lowry",
+            "slackId": "UA4K27ELX"
+        }
+    ],
+    "po": [
+        {
+            "name": "Nate Lubeck",
+            "slackId": "U03BLBAESRF"
+        },
+        {
+            "name": "John Mark Lowry",
+            "slackId": "UA4K27ELX"
+        }
+    ],
+    "uiEng": [
+        {
+            "name": "Nate Lubeck",
+            "slackId": "U03BLBAESRF"
+        },
+        {
+            "name": "John Mark Lowry",
+            "slackId": "UA4K27ELX"
+        }
+    ],
+    "beEng": [
+        {
+            "name": "Nate Lubeck",
+            "slackId": "U03BLBAESRF"
+        },
+        {
+            "name": "John Mark Lowry",
+            "slackId": "UA4K27ELX"
+        }
+    ]
+}

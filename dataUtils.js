@@ -20,9 +20,13 @@ const {
   OverridesRepository 
 } = require('./db/repository');
 
+// Environment detection
+const IS_STAGING = process.env.TRIAGE_ENV === 'staging' || process.env.NODE_ENV === 'staging';
+
 // Define file paths for persisted JSON data (kept for backup/compatibility)
 const CURRENT_STATE_FILE = path.join(__dirname, "currentState.json");
 const SPRINTS_FILE = path.join(__dirname, "sprints.json");
+const DISCIPLINES_STAGING_FILE = path.join(__dirname, "disciplines.staging.json");
 const DISCIPLINES_FILE = path.join(__dirname, "disciplines.json");
 const OVERRIDES_FILE = path.join(__dirname, "overrides.json");
 
@@ -111,7 +115,11 @@ async function readSprints() {
  */
 async function readDisciplines() {
   if (!USE_DATABASE) {
-    const disciplines = loadJSON(DISCIPLINES_FILE) || {};
+    // Prefer staging file if in staging and it exists
+    const sourceFile = (IS_STAGING && fs.existsSync(DISCIPLINES_STAGING_FILE))
+      ? DISCIPLINES_STAGING_FILE
+      : DISCIPLINES_FILE;
+    const disciplines = loadJSON(sourceFile) || {};
     
     // Validate that no user appears in multiple disciplines
     const allUsers = new Map(); // userId -> discipline
@@ -169,7 +177,10 @@ async function readDisciplines() {
   } catch (error) {
     console.error('[readDisciplines] Database error:', error);
     // Fallback to JSON if database fails
-    return loadJSON(DISCIPLINES_FILE) || {};
+    const sourceFile = (IS_STAGING && fs.existsSync(DISCIPLINES_STAGING_FILE))
+      ? DISCIPLINES_STAGING_FILE
+      : DISCIPLINES_FILE;
+    return loadJSON(sourceFile) || {};
   }
 }
 
@@ -402,12 +413,15 @@ async function getUserForSprintAndRole(sprintIndex, role, disciplines, overrides
   // Fall back to regular rotation
   const roleList = disciplines[role] || [];
   if (roleList.length === 0) {
-    console.warn(`[getUserForSprintAndRole] No users in ${role} discipline, using fallback`);
-    return FALLBACK_USERS[role] || null;
+    console.warn(`[getUserForSprintAndRole] No users in ${role} discipline`);
+    const fallbacks = getFallbackUsers();
+    return fallbacks[role] || null; // In staging, this will be null to avoid assigning real users
   }
   
   const userObj = roleList[sprintIndex % roleList.length];
-  return userObj ? userObj.slackId : FALLBACK_USERS[role];
+  if (userObj && userObj.slackId) return userObj.slackId;
+  const fallbacks = getFallbackUsers();
+  return fallbacks[role] || null;
 }
 
 /**
@@ -418,13 +432,7 @@ async function getSprintUsers(sprintIndex) {
   const disciplines = await readDisciplines();
   const overrides = await readOverrides();
   
-  const FALLBACK_USERS = {
-    account:  "U70RLDSL9",  // Megan Miller
-    producer: "U081U8XP1",  // Matt Mitchell
-    po:       "UA4K27ELX",  // John Mark Lowry
-    uiEng:    "U2SKVLZPF",  // Frank Tran
-    beEng:    "UTSQ413T6",  // Lyle Stockmoe
-  };
+  const FALLBACK_USERS = getFallbackUsers();
 
   const users = {
     account: await getUserForSprintAndRole(sprintIndex, "account", disciplines, overrides),
@@ -450,6 +458,23 @@ async function getSprintUsers(sprintIndex) {
   }
   
   return users;
+}
+
+/**
+ * Return environment-appropriate fallback user IDs per role.
+ * In staging, disable real fallbacks by returning an empty map.
+ */
+function getFallbackUsers() {
+  if (IS_STAGING) {
+    return {}; // No real fallbacks in staging to avoid assigning production users
+  }
+  return {
+    account:  "U70RLDSL9",  // Megan Miller
+    producer: "U081U8XP1",  // Matt Mitchell
+    po:       "UA4K27ELX",  // John Mark Lowry
+    uiEng:    "U2SKVLZPF",  // Frank Tran
+    beEng:    "UTSQ413T6",  // Lyle Stockmoe
+  };
 }
 
 /**

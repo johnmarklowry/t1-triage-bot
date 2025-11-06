@@ -3,21 +3,21 @@
  ********************************/
 const express = require('express');
 require('dotenv').config();
-const { scheduleDailyJobs } = require('./triageScheduler');
-const testRoutes = require('./testRoutes');
-require('./adminCommands');
+const { scheduleDailyJobs } = require('./src/services/triageScheduler');
+const testRoutes = require('./scripts/testRoutes');
+require('./src/handlers/adminCommands');
 
 // require override Handler file
-require('./overrideHandler');
+require('./src/handlers/overrideHandler');
 
 // require Bot Mention Handler for SLA assessment
-require('./botMentionHandler');
+require('./src/handlers/botMentionHandler');
 
 // require Schedule Command Handler for date-based queries
-require('./scheduleCommandHandler');
+require('./src/handlers/scheduleCommandHandler');
 
 // Import our Slack Bolt app and its receiver (which is an Express app)
-const { slackApp, receiver } = require('./appHome');
+const { slackApp, receiver } = require('./src/views/appHome');
 
 // Import database modules
 const { testConnection, getHealthStatus } = require('./db/connection');

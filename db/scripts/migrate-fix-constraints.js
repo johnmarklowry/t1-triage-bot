@@ -4,7 +4,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { query, transaction } = require('./connection');
+const { query, transaction } = require('../connection');
 
 /**
  * Run the constraint fixes migration
@@ -14,7 +14,7 @@ async function runConstraintFixes() {
     console.log('Starting database constraint fixes migration...');
     
     // Read the migration SQL file
-    const migrationPath = path.join(__dirname, 'migrations', '002_fix_duplicate_key_constraints.sql');
+    const migrationPath = path.join(__dirname, '..', 'migrations', '002_fix_duplicate_key_constraints.sql');
     const migrationSQL = fs.readFileSync(migrationPath, 'utf8');
     
     // Split the SQL into individual statements

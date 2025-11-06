@@ -17,7 +17,7 @@ const {
   getSprintUsers,
   refreshCurrentState,
   OVERRIDES_FILE
-} = require('./dataUtils');
+} = require('../services/dataUtils');
 
 dayjs.extend(utc);
 dayjs.extend(timezone);

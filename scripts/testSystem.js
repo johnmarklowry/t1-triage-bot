@@ -13,17 +13,17 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 
 // Import functions and constants from dataUtils
-const dataUtils = require("./dataUtils");
+const dataUtils = require("../src/services/dataUtils");
 const { CURRENT_STATE_FILE, readCurrentState, saveCurrentState } = dataUtils;
 
 // Define path for test logs
 const TEST_LOG_FILE = path.join(__dirname, "test_simulation_log.txt");
 
 // Import the functions we need to simulate
-const triageLogic = require("./triageLogic");
+const triageLogic = require("../src/services/triageLogic");
 
 // Import notification functions that we'll mock
-const slackNotifier = require("./slackNotifier");
+const slackNotifier = require("../src/utils/slackNotifier");
 
 // Store original functions for later restoration
 const originalFunctions = {

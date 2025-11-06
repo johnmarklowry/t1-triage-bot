@@ -25,7 +25,7 @@ const {
   refreshCurrentState
 } = require("./dataUtils");
 
-const { notifyUser, notifyAdmins, updateOnCallUserGroup, updateChannelTopic } = require("./slackNotifier");
+const { notifyUser, notifyAdmins, updateOnCallUserGroup, updateChannelTopic } = require("../utils/slackNotifier");
 
 // Define discipline-specific fallback IDs (if a discipline list is empty)
 const FALLBACK_USERS = {
@@ -399,31 +399,31 @@ async function forceSprintTransition(newSprintIndex, mockNotifications = true) {
   const notifications = [];
   
   if (mockNotifications) {
-    originalNotifyUser = require('./slackNotifier').notifyUser;
-    originalNotifyAdmins = require('./slackNotifier').notifyAdmins;
-    originalUpdateGroup = require('./slackNotifier').updateOnCallUserGroup;
-    originalUpdateTopic = require('./slackNotifier').updateChannelTopic;
+    originalNotifyUser = require('../utils/slackNotifier').notifyUser;
+    originalNotifyAdmins = require('../utils/slackNotifier').notifyAdmins;
+    originalUpdateGroup = require('../utils/slackNotifier').updateOnCallUserGroup;
+    originalUpdateTopic = require('../utils/slackNotifier').updateChannelTopic;
     
     // Replace with mock functions
-    require('./slackNotifier').notifyUser = (userId, text) => {
+    require('../utils/slackNotifier').notifyUser = (userId, text) => {
       notifications.push({ type: 'user', userId, text });
       console.log(`[MOCK] Notify user ${userId}: ${text}`);
       return Promise.resolve();
     };
     
-    require('./slackNotifier').notifyAdmins = (text) => {
+    require('../utils/slackNotifier').notifyAdmins = (text) => {
       notifications.push({ type: 'admin', text });
       console.log(`[MOCK] Notify admins: ${text}`);
       return Promise.resolve();
     };
     
-    require('./slackNotifier').updateOnCallUserGroup = (userIds) => {
+    require('../utils/slackNotifier').updateOnCallUserGroup = (userIds) => {
       notifications.push({ type: 'group', userIds });
       console.log(`[MOCK] Update user group with: ${userIds.join(', ')}`);
       return Promise.resolve();
     };
     
-    require('./slackNotifier').updateChannelTopic = (userIds) => {
+    require('../utils/slackNotifier').updateChannelTopic = (userIds) => {
       notifications.push({ type: 'topic', userIds });
       console.log(`[MOCK] Update channel topic with: ${userIds}`);
       return Promise.resolve();
@@ -457,8 +457,8 @@ async function forceSprintTransition(newSprintIndex, mockNotifications = true) {
 
     // Update Slack group and topic with deduplicated user list
     const newUserArray = rolesToArray(newRoles);
-    await require('./slackNotifier').updateOnCallUserGroup(newUserArray);
-    await require('./slackNotifier').updateChannelTopic(newUserArray);
+    await require('../utils/slackNotifier').updateOnCallUserGroup(newUserArray);
+    await require('../utils/slackNotifier').updateChannelTopic(newUserArray);
     
     // Update currentState and persist
     currentState = {
@@ -487,10 +487,10 @@ async function forceSprintTransition(newSprintIndex, mockNotifications = true) {
   } finally {
     // Restore original notification functions if mocking
     if (mockNotifications) {
-      require('./slackNotifier').notifyUser = originalNotifyUser;
-      require('./slackNotifier').notifyAdmins = originalNotifyAdmins;
-      require('./slackNotifier').updateOnCallUserGroup = originalUpdateGroup;
-      require('./slackNotifier').updateChannelTopic = originalUpdateTopic;
+      require('../utils/slackNotifier').notifyUser = originalNotifyUser;
+      require('../utils/slackNotifier').notifyAdmins = originalNotifyAdmins;
+      require('../utils/slackNotifier').updateOnCallUserGroup = originalUpdateGroup;
+      require('../utils/slackNotifier').updateChannelTopic = originalUpdateTopic;
     }
   }
 }

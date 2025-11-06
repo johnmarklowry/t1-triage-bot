@@ -2,11 +2,11 @@
  * botMentionHandler.js
  * Handles @mentions of the bot to assess bug severity based on thread content and Jira tickets
  */
-const { slackApp } = require('./appHome');
+const { slackApp } = require('../views/appHome');
 const axios = require('axios');
 
 // Load SLA guidelines from a configuration file
-const SLA_GUIDELINES = require('./sla-guidelines.json');
+const SLA_GUIDELINES = require('../../config/sla-guidelines.json');
 
 // Configure JIRA API credentials
 const JIRA_CONFIG = {

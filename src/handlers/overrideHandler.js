@@ -5,16 +5,16 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const { slackApp, receiver } = require('./appHome');
-const { getEnvironmentCommand } = require('./commandUtils');
-const { buildOverrideRequestModal } = require('./overrideModal');
+const { slackApp, receiver } = require('../views/appHome');
+const { getEnvironmentCommand } = require('../utils/commandUtils');
+const { buildOverrideRequestModal } = require('../views/overrideModal');
 
 // Import database repositories
-const { UsersRepository, OverridesRepository } = require('./db/repository');
+const { UsersRepository, OverridesRepository } = require('../../db/repository');
 
 // Path to JSON data (kept for fallback)
-const OVERRIDES_FILE = path.join(__dirname, 'overrides.json');
-const DISCIPLINES_FILE = path.join(__dirname, 'disciplines.json');
+const OVERRIDES_FILE = path.join(__dirname, '../../data', 'overrides.json');
+const DISCIPLINES_FILE = path.join(__dirname, '../../data', 'disciplines.json');
 
 // Configuration
 const USE_DATABASE = process.env.USE_DATABASE !== 'false';

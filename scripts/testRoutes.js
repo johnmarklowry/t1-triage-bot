@@ -11,7 +11,7 @@ const path = require('path');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
 const timezone = require('dayjs/plugin/timezone');
-const { readSprints, SPRINTS_FILE } = require('./dataUtils');
+const { readSprints, SPRINTS_FILE } = require('../src/services/dataUtils');
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -20,9 +20,9 @@ dayjs.extend(timezone);
 const { addTestRoutes } = require('./testSystem');
 
 // Import the forceSprintTransition function
-const { forceSprintTransition } = require('./triageLogic');
+const { forceSprintTransition } = require('../src/services/triageLogic');
 
-const dataUtils = require('./dataUtils');
+const dataUtils = require('../src/services/dataUtils');
 
 const {
   readCurrentState,
@@ -35,21 +35,21 @@ const {
   parsePTDate,
   getTodayPT,
   refreshCurrentState
-} = require("./dataUtils");
+} = require("../src/services/dataUtils");
 
 // Import the relevant functions
 const {
   notifyUser,
   updateOnCallUserGroup,
   updateChannelTopic
-} = require('./slackNotifier');
+} = require('../src/utils/slackNotifier');
 const {
   run5pmCheck,
   run8amCheck,
   runImmediateRotation,
   setCurrentSprintState,
   getCurrentState
-} = require('./triageLogic');
+} = require('../src/services/triageLogic');
 
 // For the Slack test, specify a user via .env or query param
 const TEST_SLACK_USER = process.env.TEST_SLACK_USER || null;
@@ -384,7 +384,7 @@ router.get('/debug-sprint-dates', (req, res) => {
     const date = req.query.date || dayjs().format('YYYY-MM-DD');
     
     // Read sprints directly
-    const { readSprints } = require('./dataUtils');
+    const { readSprints } = require('../src/services/dataUtils');
     const sprints = readSprints();
     
     // Test date as midnight in PT
@@ -430,20 +430,20 @@ router.get('/debug-sprint-dates', (req, res) => {
 router.get('/test-5pm-check', async (req, res) => {
   try {
     // Store original notification functions
-    const originalNotifyUser = require('./slackNotifier').notifyUser;
-    const originalNotifyAdmins = require('./slackNotifier').notifyAdmins;
+    const originalNotifyUser = require('../src/utils/slackNotifier').notifyUser;
+    const originalNotifyAdmins = require('../src/utils/slackNotifier').notifyAdmins;
     
     // Collect notifications instead of sending them
     const notifications = [];
     
     // Replace with mock functions
-    require('./slackNotifier').notifyUser = (userId, text) => {
+      require('../src/utils/slackNotifier').notifyUser = (userId, text) => {
       notifications.push({ type: 'user', userId, text });
       console.log(`[MOCK] Would notify user ${userId}: ${text}`);
       return Promise.resolve();
     };
     
-    require('./slackNotifier').notifyAdmins = (text) => {
+      require('../src/utils/slackNotifier').notifyAdmins = (text) => {
       notifications.push({ type: 'admin', text });
       console.log(`[MOCK] Would notify admins: ${text}`);
       return Promise.resolve();
@@ -452,7 +452,7 @@ router.get('/test-5pm-check', async (req, res) => {
     try {
       // Run the 5PM check with mocked notifications
       console.log("Running 5PM check with mocked notifications");
-      await require('./triageLogic').run5pmCheck();
+      await require('../src/services/triageLogic').run5pmCheck();
       
       res.json({
         message: "5PM check completed with mocked notifications",
@@ -461,8 +461,8 @@ router.get('/test-5pm-check', async (req, res) => {
       });
     } finally {
       // Restore original notification functions
-      require('./slackNotifier').notifyUser = originalNotifyUser;
-      require('./slackNotifier').notifyAdmins = originalNotifyAdmins;
+      require('../src/utils/slackNotifier').notifyUser = originalNotifyUser;
+      require('../src/utils/slackNotifier').notifyAdmins = originalNotifyAdmins;
     }
   } catch (err) {
     console.error('[test-5pm-check] Error:', err);
@@ -484,8 +484,8 @@ router.get('/force-transition', async (req, res) => {
     
     // Create a backup if requested
     if (req.query.backup === 'true') {
-      const backupFile = path.join(__dirname, "currentState.json.bak");
-      fs.copyFileSync(path.join(__dirname, "currentState.json"), backupFile);
+      const backupFile = path.join(__dirname, "..", "data", "currentState.json.bak");
+      fs.copyFileSync(path.join(__dirname, "..", "data", "currentState.json"), backupFile);
       console.log(`Created backup at ${backupFile}`);
     }
     

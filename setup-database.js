@@ -25,10 +25,10 @@ async function setupDatabase() {
     const path = require('path');
     
     const jsonFiles = [
-      'sprints.json',
-      'disciplines.json', 
-      'currentState.json',
-      'overrides.json'
+      'data/sprints.json',
+      'data/disciplines.json', 
+      'data/currentState.json',
+      'data/overrides.json'
     ];
     
     const hasJsonFiles = jsonFiles.some(file => fs.existsSync(path.join(__dirname, file)));

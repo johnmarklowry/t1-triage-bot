@@ -2,15 +2,15 @@
  * scheduleCommandHandler.js
  * Handles the /triage-schedule slash command for querying who will be on call on specific dates
  */
-const { slackApp } = require('./appHome');
-const { getEnvironmentCommand } = require('./commandUtils');
+const { slackApp } = require('../views/appHome');
+const { getEnvironmentCommand } = require('../utils/commandUtils');
 const { 
   readSprints, 
   getSprintUsers,
   parsePTDate,
   formatPTDate,
   getTodayPT
-} = require('./dataUtils');
+} = require('../services/dataUtils');
 const dayjs = require('dayjs');
 const timezone = require('dayjs/plugin/timezone');
 

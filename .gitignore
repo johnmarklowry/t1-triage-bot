@@ -1,4 +1,32 @@
 .glitchdotcom.json
 .node-gyp
 node_modules
-currentState.json
+
+# Data files (legacy/backup - some may be tracked)
+data/currentState.json
+data/currentState.json.bak
+data/*.json.bak
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Test coverage
+coverage/
+.nyc_output/

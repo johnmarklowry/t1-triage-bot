@@ -9,18 +9,18 @@ const { UsersRepository, SprintsRepository, CurrentStateRepository, OverridesRep
 // Environment detection for staging
 const IS_STAGING = process.env.TRIAGE_ENV === 'staging' || process.env.NODE_ENV === 'staging';
 
-const SPRINTS_FILE = path.join(__dirname, '..', 'sprints.json');
+const SPRINTS_FILE = path.join(__dirname, '..', 'data', 'sprints.json');
 // Prefer a staging-specific disciplines file when in staging
 const DISCIPLINES_FILE = (() => {
-  const stagingPath = path.join(__dirname, '..', 'disciplines.staging.json');
+  const stagingPath = path.join(__dirname, '..', 'data', 'disciplines.staging.json');
   if (IS_STAGING && fs.existsSync(stagingPath)) {
     console.log(`[MIGRATION] Using staging disciplines file: ${stagingPath}`);
     return stagingPath;
   }
-  return path.join(__dirname, '..', 'disciplines.json');
+  return path.join(__dirname, '..', 'data', 'disciplines.json');
 })();
-const CURRENT_STATE_FILE = path.join(__dirname, '..', 'currentState.json');
-const OVERRIDES_FILE = path.join(__dirname, '..', 'overrides.json');
+const CURRENT_STATE_FILE = path.join(__dirname, '..', 'data', 'currentState.json');
+const OVERRIDES_FILE = path.join(__dirname, '..', 'data', 'overrides.json');
 
 /**
  * Load JSON data from file

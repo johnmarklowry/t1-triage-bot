@@ -7,7 +7,11 @@
     "start": "node server.js",
     "migrate": "node -e \"require('./db/migrate').runMigrations().then(() => process.exit(0))\"",
     "migrate-data": "node db/migrate-json-data.js",
-    "db-status": "node -e \"require('./db/migrate').getMigrationStatus().then(status => { console.log(JSON.stringify(status, null, 2)); process.exit(0); })\""
+    "db-status": "node -e \"require('./db/migrate').getMigrationStatus().then(status => { console.log(JSON.stringify(status, null, 2)); process.exit(0); })\"",
+    "db:fix-constraints": "node db/scripts/migrate-fix-constraints.js",
+    "db:test-fixes": "node db/scripts/test-duplicate-key-fixes.js",
+    "db:seed-staging": "node db/scripts/seed-staging-users.js",
+    "db:clean-staging": "node db/scripts/remove-test-users.js"
   },
   "dependencies": {
     "@fastify/formbody": "^7.4.0",

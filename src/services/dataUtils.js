@@ -38,14 +38,46 @@ const USE_DATABASE = process.env.USE_DATABASE !== 'false';
  * Format a date consistently using Pacific Time
  */
 function formatPTDate(dateStr, formatStr = 'ddd MM/DD/YYYY') {
+  if (!dateStr) {
+    console.error('[formatPTDate] Invalid date input:', dateStr);
+    return '';
+  }
+  
+  // Handle Date objects and ISO strings
+  if (dateStr instanceof Date) {
+    return dayjs(dateStr).tz("America/Los_Angeles").format(formatStr);
+  }
+  
+  if (typeof dateStr === 'string' && (dateStr.includes('T') || dateStr.includes('Z'))) {
+    return dayjs(dateStr).tz("America/Los_Angeles").format(formatStr);
+  }
+  
+  // Otherwise, treat it as YYYY-MM-DD format
   return dayjs.tz(`${dateStr}T00:00:00`, "America/Los_Angeles").format(formatStr);
 }
 
 /**
  * Parse a date string consistently as midnight PT
+ * Handles various formats: Date objects, ISO strings, and YYYY-MM-DD strings
  */
 function parsePTDate(dateStr) {
-  return dayjs.tz(`${dateStr}T00:00:00`, "America/Los_Angeles");
+  if (!dateStr) {
+    console.error('[parsePTDate] Invalid date input:', dateStr);
+    return dayjs.tz("America/Los_Angeles").startOf("day");
+  }
+  
+  // If it's already a Date object, convert it
+  if (dateStr instanceof Date) {
+    return dayjs(dateStr).tz("America/Los_Angeles").startOf("day");
+  }
+  
+  // If it's an ISO string (contains T or Z), parse it directly
+  if (typeof dateStr === 'string' && (dateStr.includes('T') || dateStr.includes('Z'))) {
+    return dayjs(dateStr).tz("America/Los_Angeles").startOf("day");
+  }
+  
+  // Otherwise, treat it as YYYY-MM-DD format
+  return dayjs.tz(`${dateStr}T00:00:00`, "America/Los_Angeles").startOf("day");
 }
 
 /**
@@ -97,11 +129,25 @@ async function readSprints() {
 
   try {
     const sprints = await SprintsRepository.getAll();
-    return sprints.map(sprint => ({
-      sprintName: sprint.sprintName,
-      startDate: sprint.startDate,
-      endDate: sprint.endDate
-    }));
+    return sprints.map(sprint => {
+      // Convert Date objects to YYYY-MM-DD strings for consistency
+      const formatDate = (date) => {
+        if (!date) return null;
+        if (date instanceof Date) {
+          return dayjs(date).format('YYYY-MM-DD');
+        }
+        if (typeof date === 'string' && date.includes('T')) {
+          return dayjs(date).format('YYYY-MM-DD');
+        }
+        return date; // Already in YYYY-MM-DD format
+      };
+      
+      return {
+        sprintName: sprint.sprintName,
+        startDate: formatDate(sprint.startDate),
+        endDate: formatDate(sprint.endDate)
+      };
+    });
   } catch (error) {
     console.error('[readSprints] Database error:', error);
     // Fallback to JSON if database fails
@@ -343,7 +389,25 @@ async function findCurrentSprint() {
 
   try {
     const currentSprint = await SprintsRepository.getCurrentSprint();
-    return currentSprint;
+    if (!currentSprint) return null;
+    
+    // Normalize dates to YYYY-MM-DD format for consistency
+    const formatDate = (date) => {
+      if (!date) return null;
+      if (date instanceof Date) {
+        return dayjs(date).format('YYYY-MM-DD');
+      }
+      if (typeof date === 'string' && date.includes('T')) {
+        return dayjs(date).format('YYYY-MM-DD');
+      }
+      return date; // Already in YYYY-MM-DD format
+    };
+    
+    return {
+      ...currentSprint,
+      startDate: formatDate(currentSprint.startDate),
+      endDate: formatDate(currentSprint.endDate)
+    };
   } catch (error) {
     console.error('[findCurrentSprint] Database error:', error);
     // Fallback to JSON logic
@@ -381,7 +445,25 @@ async function findNextSprint(currentIndex) {
 
   try {
     const nextSprint = await SprintsRepository.getNextSprint(currentIndex);
-    return nextSprint;
+    if (!nextSprint) return null;
+    
+    // Normalize dates to YYYY-MM-DD format for consistency
+    const formatDate = (date) => {
+      if (!date) return null;
+      if (date instanceof Date) {
+        return dayjs(date).format('YYYY-MM-DD');
+      }
+      if (typeof date === 'string' && date.includes('T')) {
+        return dayjs(date).format('YYYY-MM-DD');
+      }
+      return date; // Already in YYYY-MM-DD format
+    };
+    
+    return {
+      ...nextSprint,
+      startDate: formatDate(nextSprint.startDate),
+      endDate: formatDate(nextSprint.endDate)
+    };
   } catch (error) {
     console.error('[findNextSprint] Database error:', error);
     // Fallback to JSON logic

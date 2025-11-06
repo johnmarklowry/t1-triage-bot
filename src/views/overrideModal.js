@@ -8,7 +8,7 @@ const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-const DISCIPLINES_FILE = path.join(__dirname, '../../data', 'disciplines.json');
+const DISCIPLINES_FILE = path.join(__dirname, '../../config', 'disciplines.json');
 const SPRINTS_FILE = path.join(__dirname, '../../data', 'sprints.json');
 
 /**

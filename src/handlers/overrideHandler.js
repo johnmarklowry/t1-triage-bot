@@ -14,7 +14,7 @@ const { UsersRepository, OverridesRepository } = require('../../db/repository');
 
 // Path to JSON data (kept for fallback)
 const OVERRIDES_FILE = path.join(__dirname, '../../data', 'overrides.json');
-const DISCIPLINES_FILE = path.join(__dirname, '../../data', 'disciplines.json');
+const DISCIPLINES_FILE = path.join(__dirname, '../../config', 'disciplines.json');
 
 // Configuration
 const USE_DATABASE = process.env.USE_DATABASE !== 'false';

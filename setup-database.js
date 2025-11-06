@@ -26,7 +26,7 @@ async function setupDatabase() {
     
     const jsonFiles = [
       'data/sprints.json',
-      'data/disciplines.json', 
+      'config/disciplines.json', 
       'data/currentState.json',
       'data/overrides.json'
     ];

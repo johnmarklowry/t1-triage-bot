@@ -26,8 +26,8 @@ const IS_STAGING = process.env.TRIAGE_ENV === 'staging' || process.env.NODE_ENV 
 // Define file paths for persisted JSON data (kept for backup/compatibility)
 const CURRENT_STATE_FILE = path.join(__dirname, "../../data", "currentState.json");
 const SPRINTS_FILE = path.join(__dirname, "../../data", "sprints.json");
-const DISCIPLINES_STAGING_FILE = path.join(__dirname, "../../data", "disciplines.staging.json");
-const DISCIPLINES_FILE = path.join(__dirname, "../../data", "disciplines.json");
+const DISCIPLINES_STAGING_FILE = path.join(__dirname, "../../config", "disciplines.staging.json");
+const DISCIPLINES_FILE = path.join(__dirname, "../../config", "disciplines.json");
 const OVERRIDES_FILE = path.join(__dirname, "../../data", "overrides.json");
 
 // Configuration for dual-write mode (can be disabled after validation)

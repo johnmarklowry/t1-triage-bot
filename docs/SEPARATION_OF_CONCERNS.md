@@ -35,7 +35,14 @@ t1-triage-bot/
 ├── scripts/               # Utility scripts
 │   ├── testRoutes.js
 │   └── testSystem.js
-├── data/                  # Data files (JSON backups)
+├── data/                  # Runtime data files (JSON backups)
+│   ├── sprints.json
+│   ├── currentState.json
+│   └── overrides.json
+├── config/                # Configuration files
+│   ├── sla-guidelines.json
+│   ├── disciplines.json
+│   └── disciplines.staging.json
 ├── tests/                 # Test files
 └── server.js              # Application entry point
 ```
@@ -95,10 +102,14 @@ t1-triage-bot/
 **Purpose**: Configuration files and constants
 
 - **sla-guidelines.json**: SLA severity level definitions
+- **disciplines.json**: Team structure and discipline assignments (organizational configuration)
+- **disciplines.staging.json**: Staging-specific team structure
 - **env.example**: Environment variable template
 
 **Responsibilities**:
 - Static configuration data
+- Organizational structure definitions
+- Business rules and guidelines
 - Environment templates
 
 ### 6. Database (`db/`)

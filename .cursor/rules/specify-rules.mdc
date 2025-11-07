@@ -1,0 +1,29 @@
+# t1-triage-bot Development Guidelines
+
+Auto-generated from all feature plans. Last updated: 2025-11-06
+
+## Active Technologies
+
+- Node.js 18+ (matches existing project runtime) + Existing project dependencies (no new runtime dependencies required); Bash scripts for workflow automation (001-add-speckit)
+
+## Project Structure
+
+```text
+src/
+tests/
+```
+
+## Commands
+
+# Add commands for Node.js 18+ (matches existing project runtime)
+
+## Code Style
+
+Node.js 18+ (matches existing project runtime): Follow standard conventions
+
+## Recent Changes
+
+- 001-add-speckit: Added Node.js 18+ (matches existing project runtime) + Existing project dependencies (no new runtime dependencies required); Bash scripts for workflow automation
+
+<!-- MANUAL ADDITIONS START -->
+<!-- MANUAL ADDITIONS END -->

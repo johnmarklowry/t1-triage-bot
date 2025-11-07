@@ -209,3 +209,4 @@ Both workflows can be used together:
 2. Use OpenSpec for change proposals during implementation
 3. Reference speckit plans in OpenSpec proposals
 
+

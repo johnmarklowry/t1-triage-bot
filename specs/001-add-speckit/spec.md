@@ -72,3 +72,4 @@ As a developer, I want the planning workflow to automatically check constitution
 - **SC-003**: All "NEEDS CLARIFICATION" items in Technical Context are resolved in research.md
 - **SC-004**: Generated plans follow the template structure and include all required sections
 
+

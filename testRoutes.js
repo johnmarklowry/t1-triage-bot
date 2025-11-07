@@ -1040,6 +1040,90 @@ function sprintDebugHandler(req, res) {
   }
 }
 
+/**
+ * GET /test/home-tab
+ * Returns JSON representation of home tab blocks for validation.
+ * Supports query parameters to test different data states:
+ * - ?state=empty - Test with no data
+ * - ?state=no-current - Test with missing current rotation
+ * - ?state=no-next - Test with missing next rotation
+ * - ?state=no-disciplines - Test with missing disciplines
+ */
+router.get('/home-tab', async (req, res) => {
+  try {
+    const { buildHomeView, buildFallbackView, getCurrentOnCall, getNextOnCall } = require('./appHome');
+    const { readDisciplines } = require('./dataUtils');
+    
+    const state = req.query.state || 'normal';
+    let current = null;
+    let next = null;
+    let disciplines = null;
+    
+    // Load data based on state parameter
+    if (state === 'empty') {
+      // Intentionally leave all as null
+      current = null;
+      next = null;
+      disciplines = null;
+    } else if (state === 'no-current') {
+      next = await getNextOnCall();
+      disciplines = await readDisciplines();
+      // current remains null
+    } else if (state === 'no-next') {
+      current = await getCurrentOnCall();
+      disciplines = await readDisciplines();
+      // next remains null
+    } else if (state === 'no-disciplines') {
+      current = await getCurrentOnCall();
+      next = await getNextOnCall();
+      // disciplines remains null
+    } else {
+      // Normal state - load all data
+      current = await getCurrentOnCall();
+      next = await getNextOnCall();
+      disciplines = await readDisciplines();
+    }
+    
+    // If all data is null, use fallback view
+    if (current === null && next === null && disciplines === null) {
+      const fallbackView = buildFallbackView(
+        'Unable to load rotation data. Please try again later.',
+        'test'
+      );
+      return res.json({
+        state,
+        view: fallbackView,
+        data: {
+          current: null,
+          next: null,
+          disciplines: null
+        }
+      });
+    }
+    
+    // Build normal home view with available data
+    const homeView = buildHomeView(current, next, disciplines);
+    
+    res.json({
+      state,
+      view: homeView,
+      data: {
+        hasCurrent: current !== null,
+        hasNext: next !== null,
+        hasDisciplines: disciplines !== null
+      },
+      blocks: homeView.blocks,
+      blockCount: homeView.blocks.length
+    });
+  } catch (error) {
+    console.error('[test/home-tab] Error:', error);
+    res.status(500).json({
+      error: `Error generating home tab view: ${error.message}`,
+      stack: error.stack
+    });
+  }
+});
+
 // Add advanced simulation routes from testSystem.js
 addTestRoutes(router);
 

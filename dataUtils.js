@@ -43,9 +43,30 @@ function formatPTDate(dateStr, formatStr = 'ddd MM/DD/YYYY') {
 
 /**
  * Parse a date string consistently as midnight PT
+ * Returns null for invalid dates instead of throwing errors
  */
 function parsePTDate(dateStr) {
-  return dayjs.tz(`${dateStr}T00:00:00`, "America/Los_Angeles");
+  // Validate input is non-null, non-undefined, and non-empty string
+  if (!dateStr || typeof dateStr !== 'string' || dateStr.trim() === '') {
+    console.warn(`[parsePTDate] Invalid date string: ${dateStr} (null, undefined, or empty)`);
+    return null;
+  }
+  
+  // Validate format (YYYY-MM-DD)
+  const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+  if (!datePattern.test(dateStr)) {
+    console.warn(`[parsePTDate] Invalid date format: ${dateStr} (expected YYYY-MM-DD)`);
+    return null;
+  }
+  
+  // Attempt parsing
+  const parsed = dayjs.tz(`${dateStr}T00:00:00`, "America/Los_Angeles");
+  if (!parsed.isValid()) {
+    console.warn(`[parsePTDate] Invalid date value: ${dateStr} (dayjs parsing failed)`);
+    return null;
+  }
+  
+  return parsed;
 }
 
 /**
@@ -331,6 +352,11 @@ async function findCurrentSprint() {
       const sprintStart = parsePTDate(startDate);
       const sprintEnd = parsePTDate(endDate);
       
+      // Skip sprints with invalid dates
+      if (!sprintStart || !sprintEnd) {
+        continue;
+      }
+      
       if (
         (today.isAfter(sprintStart) || today.isSame(sprintStart, 'day')) &&
         (today.isBefore(sprintEnd) || today.isSame(sprintEnd, 'day'))
@@ -354,6 +380,11 @@ async function findCurrentSprint() {
       const { sprintName, startDate, endDate } = sprints[i];
       const sprintStart = parsePTDate(startDate);
       const sprintEnd = parsePTDate(endDate);
+      
+      // Skip sprints with invalid dates
+      if (!sprintStart || !sprintEnd) {
+        continue;
+      }
       
       if (
         (today.isAfter(sprintStart) || today.isSame(sprintStart, 'day')) &&
@@ -486,6 +517,10 @@ async function getUpcomingSprints() {
   
   return allSprints.filter(sprint => {
     const sprintStart = parsePTDate(sprint.startDate);
+    // Skip sprints with invalid start dates
+    if (!sprintStart) {
+      return false;
+    }
     return sprintStart.isAfter(today) || sprintStart.isSame(today, 'day');
   });
 }

@@ -34,7 +34,7 @@ slackApp.command(getEnvironmentCommand('admin-sprints'), async ({ command, ack, 
     }
     
     // Get all sprints
-    const sprints = readSprints();
+    const sprints = await readSprints();
     
     // Build blocks for the modal
     const blocks = [
@@ -175,7 +175,7 @@ slackApp.view('add_sprint_modal', async ({ ack, body, view, client, logger }) =>
     }
     
     // Get current sprints
-    const sprints = readSprints();
+    const sprints = await readSprints();
     
     // Add new sprint
     sprints.push({
@@ -225,7 +225,7 @@ slackApp.command(getEnvironmentCommand('admin-disciplines'), async ({ command, a
     }
     
     // Get all disciplines
-    const disciplines = readDisciplines();
+    const disciplines = await readDisciplines();
     
     // Build blocks for the modal
     const blocks = [
@@ -279,7 +279,7 @@ slackApp.action(/manage_discipline_(.*)/, async ({ ack, body, client, logger, ac
   await ack();
   try {
     const role = action.value;
-    const disciplines = readDisciplines();
+    const disciplines = await readDisciplines();
     const members = disciplines[role] || [];
     
     // Build blocks for the discipline management modal
@@ -347,14 +347,14 @@ slackApp.action(/manage_discipline_(.*)/, async ({ ack, body, client, logger, ac
 /**
  * Handle remove_member button clicks
  */
-slackApp.action(/remove_member_(.*)/,/add_member_(.*)/, async ({ ack, body, client, logger, action }) => {
+slackApp.action(/remove_member_(.*)/, async ({ ack, body, client, logger, action }) => {
   await ack();
   try {
     const role = action.action_id.replace('remove_member_', '');
     const slackId = action.value;
     
     // Get current disciplines
-    const disciplines = readDisciplines();
+    const disciplines = await readDisciplines();
     
     // Remove the member
     if (disciplines[role]) {
@@ -508,7 +508,7 @@ slackApp.view('add_member_modal', async ({ ack, body, view, client, logger }) =>
     }
     
     // Get current disciplines
-    const disciplines = readDisciplines();
+    const disciplines = await readDisciplines();
     
     // Initialize role array if it doesn't exist
     if (!disciplines[role]) {

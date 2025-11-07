@@ -28,6 +28,11 @@ async function findSprintForDate(targetDate) {
     const sprintStart = parsePTDate(startDate);
     const sprintEnd = parsePTDate(endDate);
     
+    // Skip sprints with invalid dates
+    if (!sprintStart || !sprintEnd) {
+      continue;
+    }
+    
     if (
       (datePT.isAfter(sprintStart) || datePT.isSame(sprintStart, 'day')) &&
       (datePT.isBefore(sprintEnd) || datePT.isSame(sprintEnd, 'day'))

@@ -3,6 +3,8 @@
 Auto-generated from all feature plans. Last updated: 2025-11-06
 
 ## Active Technologies
+- Node.js 18+ (matches existing project runtime) + dayjs with timezone plugin (already in use), existing triageLogic.js and dataUtils.js modules (002-fix-5pm-time-error)
+- N/A (bug fix, no storage changes) (002-fix-5pm-time-error)
 
 - Node.js 18+ (matches existing project runtime) + Existing project dependencies (no new runtime dependencies required); Bash scripts for workflow automation (001-add-speckit)
 
@@ -22,6 +24,7 @@ tests/
 Node.js 18+ (matches existing project runtime): Follow standard conventions
 
 ## Recent Changes
+- 002-fix-5pm-time-error: Added Node.js 18+ (matches existing project runtime) + dayjs with timezone plugin (already in use), existing triageLogic.js and dataUtils.js modules
 
 - 001-add-speckit: Added Node.js 18+ (matches existing project runtime) + Existing project dependencies (no new runtime dependencies required); Bash scripts for workflow automation
 

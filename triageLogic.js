@@ -129,11 +129,23 @@ async function run5pmCheck() {
       return;
     }
 
+    // Validate endDate exists before parsing
+    if (!currentSprint.endDate) {
+      console.warn(`[5PM] Current sprint ${currentSprint.sprintName || 'unknown'} has no endDate, skipping check.`);
+      return;
+    }
+
     // Interpret today's date in Pacific Time
     const todayPT = getTodayPT();
 
     // Also interpret the sprint's endDate in Pacific Time
     const sprintEndPT = parsePTDate(currentSprint.endDate);
+    
+    // Check if parsing succeeded
+    if (!sprintEndPT) {
+      console.warn(`[5PM] Invalid endDate for sprint ${currentSprint.sprintName || 'unknown'}, skipping check.`);
+      return;
+    }
 
     // If the current PT date is exactly the same calendar day as the sprint's end date
     if (todayPT.isSame(sprintEndPT, "day")) {

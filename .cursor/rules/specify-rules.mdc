@@ -7,6 +7,12 @@ Auto-generated from all feature plans. Last updated: 2025-11-06
 - N/A (bug fix, no storage changes) (002-fix-5pm-time-error)
 - Node.js 18+ + @slack/bolt, dayjs (001-improve-home-tab)
 - PostgreSQL (via dataUtils.js) with JSON fallback (001-improve-home-tab)
+- Node.js 18.x + node-cron, dayjs (utc/timezone plugins), @slack/web-api, pg (010-update-notify-cron)
+- PostgreSQL (via `db/repository.js`) with JSON file fallback through `dataUtils.js` (010-update-notify-cron)
+- Node.js ≥18 (per `package.json` engines) + `pg` / `pg-pool` (node-postgres) for migrations and repositories (010-update-notify-cron)
+- PostgreSQL (Railway-managed instance) (010-update-notify-cron)
+- Node.js 18 + `@slack/web-api`, `dayjs` with timezone plugin, custom repository layer (004-notification-updates)
+- PostgreSQL (`notification_snapshots`, `cron_trigger_audits` tables) (004-notification-updates)
 
 - Node.js 18+ (matches existing project runtime) + Existing project dependencies (no new runtime dependencies required); Bash scripts for workflow automation (001-add-speckit)
 
@@ -26,10 +32,10 @@ tests/
 Node.js 18+ (matches existing project runtime): Follow standard conventions
 
 ## Recent Changes
-- 001-improve-home-tab: Added Node.js 18+ + @slack/bolt, dayjs
-- 002-fix-5pm-time-error: Added Node.js 18+ (matches existing project runtime) + dayjs with timezone plugin (already in use), existing triageLogic.js and dataUtils.js modules
+- 004-notification-updates: Added Node.js 18 + `@slack/web-api`, `dayjs` with timezone plugin, custom repository layer
+- 010-update-notify-cron: Added Node.js ≥18 (per `package.json` engines) + `pg` / `pg-pool` (node-postgres) for migrations and repositories
+- 010-update-notify-cron: Added Node.js 18.x + node-cron, dayjs (utc/timezone plugins), @slack/web-api, pg
 
-- 001-add-speckit: Added Node.js 18+ (matches existing project runtime) + Existing project dependencies (no new runtime dependencies required); Bash scripts for workflow automation
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->

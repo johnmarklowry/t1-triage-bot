@@ -23,11 +23,13 @@ const { slackApp, receiver } = require('./appHome');
 const { testConnection, getHealthStatus } = require('./db/connection');
 const { runMigrations } = require('./db/migrate');
 const { setupDatabase } = require('./setup-database');
+const railwayCronRouter = require('./routes/railwayCron');
 
 const app = express();
 
 // Mount test routes on the same Express app that the Slack receiver uses
 app.use('/test', testRoutes);
+app.use('/jobs', railwayCronRouter);
 
 // Health check route with database status
 app.get('/', async (req, res) => {

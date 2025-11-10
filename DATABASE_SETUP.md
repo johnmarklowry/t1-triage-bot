@@ -100,6 +100,36 @@ CREATE TABLE audit_logs (
 );
 ```
 
+#### `cron_trigger_audits`
+Records each Railway cron invocation and its outcome.
+
+```sql
+CREATE TABLE cron_trigger_audits (
+  id UUID PRIMARY KEY,
+  triggered_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  scheduled_at TIMESTAMPTZ,
+  result TEXT NOT NULL CHECK (result IN ('delivered', 'skipped', 'deferred', 'error')),
+  details JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+#### `notification_snapshots`
+Persists the last delivered notification payload for diffing, auditing, and weekend deferrals.
+
+```sql
+CREATE TABLE notification_snapshots (
+  id SERIAL PRIMARY KEY,
+  captured_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  discipline_assignments JSONB NOT NULL,
+  hash TEXT NOT NULL,
+  delivery_status TEXT NOT NULL CHECK (delivery_status IN ('delivered', 'skipped', 'deferred')),
+  delivery_reason TEXT,
+  railway_trigger_id UUID REFERENCES cron_trigger_audits(id) ON DELETE SET NULL,
+  next_delivery TIMESTAMPTZ
+);
+```
+
 ### Indexes
 
 The schema includes optimized indexes for common queries:
@@ -192,6 +222,10 @@ npm run migrate
 
 # Or run the full setup script
 node setup-database.js
+
+# Verify Railway notification tables
+psql "$DATABASE_URL" -c "\d cron_trigger_audits"
+psql "$DATABASE_URL" -c "\d notification_snapshots"
 ```
 
 ### 6. Migrate Existing Data

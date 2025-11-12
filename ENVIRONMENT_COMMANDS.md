@@ -95,3 +95,28 @@ When deploying to production:
 1. Ensure no staging environment variables are set
 2. Register the standard slash commands in your Slack app configuration
 3. Users can use the standard command names
+
+## Railway Cron Scheduling
+
+To ensure rotation notifications run on infrastructure-managed cron instead of the in-app scheduler:
+
+1. **Create/Update Cron Job**  
+   - In Railway, add a cron trigger targeting `POST /jobs/railway/notify-rotation`.  
+   - Recommended schedule: `0 16 * * *` (8:00 AM PT daily). Adjust as needed for business hours.
+
+2. **Set Secrets**  
+   - Add `RAILWAY_CRON_SECRET` to the service variables.  
+   - Share the value with the engineering team via the existing secret management workflow.
+
+3. **Webhook Configuration**  
+   - Configure the Railway cron job to include the secret in header `X-Railway-Cron-Signature`.  
+   - Confirm the webhook URL includes the correct environment domain (staging vs production).
+
+4. **Disable Legacy Scheduler**  
+   - After verifying Railway cron, disable the `node-cron` job in `triageScheduler.js` (feature flag or removal).  
+   - Document the cutover date and rollback plan in the release notes.
+   - Set `ENABLE_IN_APP_CRON=true` only when explicitly testing the legacy scheduler.
+
+5. **Verification**  
+   - Use the quickstart guide in `specs/004-notification-updates/quickstart.md` to simulate cron invocations.  
+   - Confirm `notification_snapshots` and `cron_trigger_audits` tables receive new entries per trigger.

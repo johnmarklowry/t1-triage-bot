@@ -892,10 +892,10 @@ router.get('/force-transition', async (req, res) => {
   }
 });
 
-router.get('/sprint-data-check', (req, res) => {
+router.get('/sprint-data-check', async (req, res) => {
   try {
     // First, let's check what readSprints actually returns
-    const sprintsData = readSprints();
+    const sprintsData = await readSprints();
     
     // Let's examine what we got back
     const debugInfo = {
@@ -949,9 +949,9 @@ router.get('/debug-date', (req, res) => {
 /**
  * Detailed debug handler for sprint detection logic
  */
-function sprintDebugHandler(req, res) {
+async function sprintDebugHandler(req, res) {
   try {
-    const sprintsData = readSprints();
+    const sprintsData = await readSprints();
     
     // Basic information about the sprints data
     const debugInfo = {

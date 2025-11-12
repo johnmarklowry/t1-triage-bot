@@ -13,10 +13,14 @@
     "environments": {
         "production": {
             "variables": {
-                "NODE_ENV": "production"
+                "NODE_ENV": "production",
+                "RAILWAY_CRON_SECRET": "set-in-railway-dashboard",
+                "RAILWAY_CRON_SCHEDULE": "0 16 * * *",
+                "RAILWAY_CRON_TARGET": "/jobs/railway/notify-rotation"
             }
         }
     }
 }
+
 
 

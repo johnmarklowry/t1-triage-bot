@@ -73,3 +73,4 @@ As a developer, I want the planning workflow to automatically check constitution
 - **SC-004**: Generated plans follow the template structure and include all required sections
 
 
+

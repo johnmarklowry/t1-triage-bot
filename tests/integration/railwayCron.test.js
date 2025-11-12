@@ -50,8 +50,8 @@ describe('POST /railway/notify-rotation', () => {
       .expect(202);
 
     expect(response.body.result).toBe('skipped');
-    expect(response.body.notificationsSent).toBe(0);
-    expect(response.body.snapshotId).toBe(42);
+    expect(response.body.notifications_sent).toBe(0);
+    expect(response.body.snapshot_id).toBe(42);
     expect(slackNotifier.notifyUser).not.toHaveBeenCalled();
   });
 
@@ -85,8 +85,8 @@ describe('POST /railway/notify-rotation', () => {
       .expect(202);
 
     expect(response.body.result).toBe('delivered');
-    expect(response.body.notificationsSent).toBe(2);
-    expect(response.body.snapshotId).toBe(42);
+    expect(response.body.notifications_sent).toBe(2);
+    expect(response.body.snapshot_id).toBe(42);
     expect(snapshotService.saveSnapshot).toHaveBeenCalled();
   });
 });

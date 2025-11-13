@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS cron_trigger_audits (
   id UUID PRIMARY KEY,
   triggered_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   scheduled_at TIMESTAMPTZ,
-  result TEXT NOT NULL CHECK (result IN ('delivered', 'skipped', 'deferred', 'error')),
+  result TEXT NOT NULL CHECK (result IN ('delivered', 'skipped', 'deferred', 'error', 'pending')),
   details JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

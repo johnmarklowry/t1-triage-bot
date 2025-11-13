@@ -21,8 +21,8 @@ async function handleRailwayNotification(payload = {}) {
   if (existingAudit && existingAudit.result && existingAudit.result !== 'pending') {
     return {
       result: existingAudit.result,
-      notificationsSent: existingAudit.details?.notificationsSent || 0,
-      snapshotId: existingAudit.details?.snapshotId || null,
+      notifications_sent: existingAudit.details?.notifications_sent || 0,
+      snapshot_id: existingAudit.details?.snapshot_id || null,
     };
   }
 
@@ -51,14 +51,14 @@ async function handleRailwayNotification(payload = {}) {
       nextDelivery: nextBusinessDay(scheduledTime),
     });
     await updateCronTriggerResult(triggerId, 'deferred', {
-      snapshotId: snapshot.id,
-      notificationsSent: 0,
+      snapshot_id: snapshot.id,
+      notifications_sent: 0,
       nextDelivery: snapshot.nextDelivery,
     });
     return {
       result: 'deferred',
-      notificationsSent: 0,
-      snapshotId: snapshot.id,
+      notifications_sent: 0,
+      snapshot_id: snapshot.id,
       nextDelivery: snapshot.nextDelivery,
     };
   }
@@ -72,13 +72,13 @@ async function handleRailwayNotification(payload = {}) {
       railwayTriggerId: triggerId,
     });
     await updateCronTriggerResult(triggerId, 'skipped', {
-      snapshotId: snapshot.id,
-      notificationsSent: 0,
+      snapshot_id: snapshot.id,
+      notifications_sent: 0,
     });
     return {
       result: 'skipped',
-      notificationsSent: 0,
-      snapshotId: snapshot.id,
+      notifications_sent: 0,
+      snapshot_id: snapshot.id,
     };
   }
 
@@ -96,8 +96,8 @@ async function handleRailwayNotification(payload = {}) {
   });
 
   await updateCronTriggerResult(triggerId, 'delivered', {
-    snapshotId: snapshot.id,
-    notificationsSent: deliveryResult.sent,
+    snapshot_id: snapshot.id,
+    notifications_sent: deliveryResult.sent,
   });
 
   if (latestSnapshot && latestSnapshot.deliveryStatus === 'deferred') {
@@ -114,8 +114,8 @@ async function handleRailwayNotification(payload = {}) {
 
   return {
     result: 'delivered',
-    notificationsSent: deliveryResult.sent,
-    snapshotId: snapshot.id,
+    notifications_sent: deliveryResult.sent,
+    snapshot_id: snapshot.id,
   };
 }
 

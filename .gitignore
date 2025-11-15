@@ -2,3 +2,13 @@
 .node-gyp
 node_modules
 currentState.json
+
+# Environment files with sensitive credentials
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.staging
+# Keep env.example as it's a template
+!env.example

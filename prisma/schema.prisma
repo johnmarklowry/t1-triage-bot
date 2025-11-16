@@ -1,11 +1,92 @@
-// Prisma schema for triage bot
-// Datasource and generator; models will be added in Phase 2
+generator client {
+  provider = "prisma-client-js"
+}
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-generator client {
-  provider = "prisma-client-js"
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model audit_logs {
+  id         Int       @id @default(autoincrement())
+  table_name String    @db.VarChar(50)
+  record_id  Int?
+  operation  String    @db.VarChar(20)
+  old_values Json?
+  new_values Json?
+  changed_by String?   @db.VarChar(50)
+  changed_at DateTime? @default(now()) @db.Timestamp(6)
+  reason     String?
+
+  @@index([changed_at], map: "idx_audit_logs_changed_at")
+  @@index([table_name, record_id], map: "idx_audit_logs_table_record")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model current_state {
+  id                Int       @id @unique(map: "current_state_single_record") @default(autoincrement())
+  sprint_index      Int?
+  account_slack_id  String?   @db.VarChar(50)
+  producer_slack_id String?   @db.VarChar(50)
+  po_slack_id       String?   @db.VarChar(50)
+  ui_eng_slack_id   String?   @db.VarChar(50)
+  be_eng_slack_id   String?   @db.VarChar(50)
+  updated_at        DateTime? @default(now()) @db.Timestamp(6)
+  sprints           sprints?  @relation(fields: [sprint_index], references: [sprint_index], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model migrations {
+  id          Int       @id @default(autoincrement())
+  filename    String    @unique @db.VarChar(255)
+  executed_at DateTime? @default(now()) @db.Timestamp(6)
+  checksum    String?   @db.VarChar(64)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model overrides {
+  id                   Int       @id @default(autoincrement())
+  sprint_index         Int
+  role                 String    @db.VarChar(20)
+  original_slack_id    String?   @db.VarChar(50)
+  replacement_slack_id String    @db.VarChar(50)
+  replacement_name     String?   @db.VarChar(100)
+  requested_by         String    @db.VarChar(50)
+  approved             Boolean?  @default(false)
+  approved_by          String?   @db.VarChar(50)
+  approval_timestamp   DateTime? @db.Timestamp(6)
+  created_at           DateTime? @default(now()) @db.Timestamp(6)
+  updated_at           DateTime? @default(now()) @db.Timestamp(6)
+
+  @@unique([sprint_index, role, requested_by, replacement_slack_id], map: "overrides_unique_request")
+  @@index([approved], map: "idx_overrides_approved")
+  @@index([sprint_index, role], map: "idx_overrides_sprint_role")
+}
+
+model sprints {
+  id            Int             @id @default(autoincrement())
+  sprint_name   String          @db.VarChar(50)
+  start_date    DateTime        @db.Date
+  end_date      DateTime        @db.Date
+  sprint_index  Int             @unique
+  created_at    DateTime?       @default(now()) @db.Timestamp(6)
+  updated_at    DateTime?       @default(now()) @db.Timestamp(6)
+  current_state current_state[]
+
+  @@index([start_date, end_date], map: "idx_sprints_dates")
+  @@index([sprint_index], map: "idx_sprints_index")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model users {
+  id         Int       @id @default(autoincrement())
+  slack_id   String    @unique @db.VarChar(50)
+  name       String    @db.VarChar(100)
+  discipline String    @db.VarChar(20)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  updated_at DateTime? @default(now()) @db.Timestamp(6)
+
+  @@unique([slack_id, discipline], map: "users_slack_discipline_unique")
+  @@index([discipline], map: "idx_users_discipline")
+  @@index([slack_id], map: "idx_users_slack_id")
 }

@@ -90,3 +90,11 @@ model users {
   @@index([discipline], map: "idx_users_discipline")
   @@index([slack_id], map: "idx_users_slack_id")
 }
+
+model discipline {
+  id   String @id @default(cuid())
+  name String
+  env  String @db.VarChar(16)
+
+  @@unique([name, env], name: "name_env")
+}

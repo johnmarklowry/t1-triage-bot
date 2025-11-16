@@ -1,0 +1,11 @@
+// Prisma schema for triage bot
+// Datasource and generator; models will be added in Phase 2
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}

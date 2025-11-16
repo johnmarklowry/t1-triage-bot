@@ -7,7 +7,12 @@
     "start": "node server.js",
     "migrate": "node -e \"require('./db/migrate').runMigrations().then(() => process.exit(0))\"",
     "migrate-data": "node db/migrate-json-data.js",
-    "db-status": "node -e \"require('./db/migrate').getMigrationStatus().then(status => { console.log(JSON.stringify(status, null, 2)); process.exit(0); })\""
+    "db-status": "node -e \"require('./db/migrate').getMigrationStatus().then(status => { console.log(JSON.stringify(status, null, 2)); process.exit(0); })\"",
+    "prisma:generate": "npx prisma generate",
+    "prisma:migrate:dev": "npx prisma migrate dev",
+    "prisma:migrate:deploy": "npx prisma migrate deploy",
+    "prisma:validate": "npx prisma validate",
+    "prisma:format": "npx prisma format"
   },
   "dependencies": {
     "@fastify/formbody": "^7.4.0",
@@ -24,7 +29,8 @@
     "node-cron": "^3.0.2",
     "openai": "^4.24.1",
     "pg": "^8.11.3",
-    "pg-pool": "^3.6.1"
+    "pg-pool": "^3.6.1",
+    "@prisma/client": "^5.20.0"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -38,6 +44,7 @@
     "glitch"
   ],
   "devDependencies": {
-    "supertest": "^7.1.4"
+    "supertest": "^7.1.4",
+    "prisma": "^5.20.0"
   }
 }

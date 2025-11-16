@@ -12,6 +12,11 @@ let pool = null;
  * Parse DATABASE_URL or build config from individual environment variables
  */
 function getDatabaseConfig() {
+  // Enforce DATABASE_URL in production environments
+  if ((process.env.NODE_ENV === 'production') && !process.env.DATABASE_URL) {
+    throw new Error('[DB] DATABASE_URL is required in production environment');
+  }
+
   // Check if DATABASE_URL is provided (Railway convention)
   if (process.env.DATABASE_URL) {
     console.log('[DB] Using DATABASE_URL from environment');

@@ -30,7 +30,8 @@
     "openai": "^4.24.1",
     "pg": "^8.11.3",
     "pg-pool": "^3.6.1",
-    "@prisma/client": "^5.20.0"
+    "@prisma/client": "^5.22.0",
+    "prisma": "^5.22.0"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -44,7 +45,6 @@
     "glitch"
   ],
   "devDependencies": {
-    "supertest": "^7.1.4",
-    "prisma": "^5.20.0"
+    "supertest": "^7.1.4"
   }
 }

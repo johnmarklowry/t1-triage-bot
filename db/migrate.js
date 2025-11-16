@@ -5,6 +5,14 @@
 const fs = require('fs');
 const path = require('path');
 const { query, transaction } = require('./connection');
+const {
+  parseMigrationFile,
+  validateDependencies,
+  reorderStatements,
+  getExecutedTables,
+  MigrationValidationError,
+  MigrationParseError
+} = require('./migrationValidator');
 
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
 
@@ -123,25 +131,73 @@ async function executeMigration(filename) {
   
   console.log(`[MIGRATION] Executing ${filename}...`);
   
-  await transaction(async (client) => {
-    // Split SQL into individual statements and execute each one
-    const statements = splitSQLStatements(sql);
+  try {
+    // Parse migration file to detect dependencies
+    const migrationFile = parseMigrationFile(filename, sql);
     
-    for (const statement of statements) {
-      if (statement.length > 0) {
-        await client.query(statement);
-      }
+    // Get tables that already exist in the database
+    const executedTables = await getExecutedTables();
+    
+    // Validate dependencies before execution (pass empty array for allMigrationFiles since we're validating single migration)
+    const validation = await validateDependencies(migrationFile, executedTables, []);
+    
+    if (!validation.valid) {
+      // Extract first error details for error object
+      const firstError = validation.errors[0] || '';
+      const missingTableMatch = firstError.match(/Table "([^"]+)"/);
+      const dependentTableMatch = firstError.match(/referenced by "([^"]+)"/);
+      
+      const errorMessage = `Migration dependency error in ${filename}:\n  ${validation.errors.join('\n  ')}`;
+      throw new MigrationValidationError(
+        errorMessage,
+        filename,
+        missingTableMatch ? missingTableMatch[1] : null,
+        dependentTableMatch ? dependentTableMatch[1] : null,
+        null
+      );
     }
     
-    // Record the migration
-    const checksum = require('crypto').createHash('md5').update(sql).digest('hex');
-    await client.query(
-      'INSERT INTO migrations (filename, checksum) VALUES ($1, $2)',
-      [filename, checksum]
+    // Log warnings if any
+    if (validation.warnings.length > 0) {
+      console.log(`[MIGRATION] Warnings for ${filename}:`);
+      validation.warnings.forEach(warning => console.log(`  - ${warning}`));
+    }
+    
+    // Reorder statements to satisfy dependencies
+    const reorderedStatements = reorderStatements(migrationFile.statements, migrationFile.dependencies);
+    
+    // Check if reordering occurred
+    const wasReordered = reorderedStatements.some((stmt, idx) => 
+      stmt.originalIndex !== idx
     );
-  });
-  
-  console.log(`[MIGRATION] Completed ${filename}`);
+    if (wasReordered) {
+      console.log(`[MIGRATION] Reordered ${reorderedStatements.length} statements to satisfy dependencies`);
+    }
+    
+    await transaction(async (client) => {
+      // Execute reordered statements
+      for (const statement of reorderedStatements) {
+        if (statement.sql && statement.sql.trim().length > 0) {
+          await client.query(statement.sql);
+        }
+      }
+      
+      // Record the migration
+      const checksum = require('crypto').createHash('md5').update(sql).digest('hex');
+      await client.query(
+        'INSERT INTO migrations (filename, checksum) VALUES ($1, $2)',
+        [filename, checksum]
+      );
+    });
+    
+    console.log(`[MIGRATION] Completed ${filename}`);
+  } catch (error) {
+    if (error instanceof MigrationValidationError || error instanceof MigrationParseError) {
+      throw error;
+    }
+    // Re-throw other errors
+    throw error;
+  }
 }
 
 /**
@@ -168,7 +224,42 @@ async function runMigrations() {
       return;
     }
     
-    console.log(`[MIGRATION] Running ${pending.length} pending migrations...`);
+    // Validate all pending migrations before executing any
+    console.log('[MIGRATION] Validating pending migrations...');
+    const fs = require('fs');
+    const allMigrationFiles = [];
+    
+    for (const filename of pending) {
+      const filePath = path.join(MIGRATIONS_DIR, filename);
+      const sql = fs.readFileSync(filePath, 'utf8');
+      const migrationFile = parseMigrationFile(filename, sql);
+      allMigrationFiles.push(migrationFile);
+    }
+    
+    // Get executed tables for validation
+    const executedTables = await getExecutedTables();
+    
+    // Validate all migrations
+    for (const migrationFile of allMigrationFiles) {
+      const validation = await validateDependencies(migrationFile, executedTables, allMigrationFiles);
+      if (!validation.valid) {
+        // Extract first error details for error object
+        const firstError = validation.errors[0] || '';
+        const missingTableMatch = firstError.match(/Table "([^"]+)"/);
+        const dependentTableMatch = firstError.match(/referenced by "([^"]+)"/);
+        
+        const errorMessage = `Migration dependency error in ${migrationFile.filename}:\n  ${validation.errors.join('\n  ')}`;
+        throw new MigrationValidationError(
+          errorMessage,
+          migrationFile.filename,
+          missingTableMatch ? missingTableMatch[1] : null,
+          dependentTableMatch ? dependentTableMatch[1] : null,
+          null
+        );
+      }
+    }
+    
+    console.log(`[MIGRATION] Validation passed. Running ${pending.length} pending migrations...`);
     
     // Execute each pending migration
     for (const filename of pending) {

@@ -228,6 +228,23 @@ psql "$DATABASE_URL" -c "\d cron_trigger_audits"
 psql "$DATABASE_URL" -c "\d notification_snapshots"
 ```
 
+#### Automatic Dependency Handling
+
+The migration system automatically handles table dependencies to prevent foreign key constraint errors:
+
+- **Automatic Validation**: Before executing any migration, the system validates that all referenced tables exist (either in the database or in the same migration file)
+- **Statement Reordering**: If tables are created in the wrong order within a migration file, statements are automatically reordered to ensure referenced tables are created before tables that reference them
+- **Cross-Migration Validation**: The system validates dependencies across multiple migration files to catch forward dependency violations
+- **Clear Error Messages**: If a dependency cannot be satisfied, the system provides detailed error messages identifying the missing table, migration file, and suggested fixes
+
+**Example**: If migration `004_create_notification_snapshots.sql` creates both `cron_trigger_audits` and `notification_snapshots` tables, and `notification_snapshots` has a foreign key reference to `cron_trigger_audits`, the system will:
+1. Detect the dependency relationship
+2. Validate that `cron_trigger_audits` is created in the same migration
+3. Automatically reorder statements if needed to create `cron_trigger_audits` first
+4. Execute the migration successfully
+
+This ensures migrations execute correctly even when tables are created and referenced in the same migration file, preventing the `relation "table_name" does not exist` errors.
+
 ### 6. Migrate Existing Data
 
 **Railway Deployment:**
@@ -432,6 +449,8 @@ Set up cron job for regular backups:
 - Check database logs for detailed error messages
 - Verify migration files are valid SQL
 - Ensure database user has CREATE/ALTER permissions
+- If you see dependency errors, check that referenced tables exist in previous migrations or in the same migration file
+- Use the test route `/test/migration-validation` to validate migrations before execution
 
 **Data Inconsistency:**
 - Check audit logs for failed operations

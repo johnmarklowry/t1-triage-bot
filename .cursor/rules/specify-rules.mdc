@@ -13,6 +13,8 @@ Auto-generated from all feature plans. Last updated: 2025-11-06
 - PostgreSQL (Railway-managed instance) (010-update-notify-cron)
 - Node.js 18 + `@slack/web-api`, `dayjs` with timezone plugin, custom repository layer (004-notification-updates)
 - PostgreSQL (`notification_snapshots`, `cron_trigger_audits` tables) (004-notification-updates)
+- Node.js 18+ (CommonJS) + pg (PostgreSQL client), pg-pool (connection pooling) (009-fix-migration-dependencies)
+- PostgreSQL database (009-fix-migration-dependencies)
 
 - Node.js 18+ (matches existing project runtime) + Existing project dependencies (no new runtime dependencies required); Bash scripts for workflow automation (001-add-speckit)
 
@@ -32,9 +34,9 @@ tests/
 Node.js 18+ (matches existing project runtime): Follow standard conventions
 
 ## Recent Changes
+- 009-fix-migration-dependencies: Added Node.js 18+ (CommonJS) + pg (PostgreSQL client), pg-pool (connection pooling)
 - 004-notification-updates: Added Node.js 18 + `@slack/web-api`, `dayjs` with timezone plugin, custom repository layer
 - 010-update-notify-cron: Added Node.js ≥18 (per `package.json` engines) + `pg` / `pg-pool` (node-postgres) for migrations and repositories
-- 010-update-notify-cron: Added Node.js 18.x + node-cron, dayjs (utc/timezone plugins), @slack/web-api, pg
 
 
 <!-- MANUAL ADDITIONS START -->

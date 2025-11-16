@@ -1124,6 +1124,125 @@ router.get('/home-tab', async (req, res) => {
   }
 });
 
+/**
+ * GET /test/migration-validation
+ * Test route for migration dependency validation
+ * Returns validation results for a specific migration file or all pending migrations
+ * Usage:
+ *   GET /test/migration-validation?filename=004_create_notification_snapshots.sql
+ *   GET /test/migration-validation (validates all pending migrations)
+ */
+router.get('/migration-validation', async (req, res) => {
+  try {
+    const { parseMigrationFile, validateDependencies, getExecutedTables } = require('./db/migrationValidator');
+    const { getExecutedMigrations, getMigrationFiles } = require('./db/migrate');
+    const fs = require('fs');
+    const path = require('path');
+    
+    const filename = req.query.filename;
+    const MIGRATIONS_DIR = path.join(__dirname, 'db', 'migrations');
+    
+    if (filename) {
+      // Validate a specific migration file
+      const filePath = path.join(MIGRATIONS_DIR, filename);
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({
+          error: `Migration file not found: ${filename}`
+        });
+      }
+      
+      const sql = fs.readFileSync(filePath, 'utf8');
+      const migrationFile = parseMigrationFile(filename, sql);
+      const executedTables = await getExecutedTables();
+      const executedMigrations = await getExecutedMigrations();
+      
+      // Get all migration files for cross-migration validation
+      const allMigrationFiles = [];
+      const available = getMigrationFiles();
+      for (const f of available) {
+        if (f !== filename) {
+          const fp = path.join(MIGRATIONS_DIR, f);
+          const content = fs.readFileSync(fp, 'utf8');
+          allMigrationFiles.push(parseMigrationFile(f, content));
+        }
+      }
+      allMigrationFiles.push(migrationFile);
+      
+      const validation = await validateDependencies(migrationFile, executedTables, allMigrationFiles);
+      
+      res.json({
+        filename,
+        valid: validation.valid,
+        errors: validation.errors,
+        warnings: validation.warnings,
+        migrationInfo: {
+          tablesCreated: migrationFile.tablesCreated,
+          dependencies: migrationFile.dependencies,
+          statementCount: migrationFile.statements.length
+        },
+        executedTables: executedTables.length,
+        executedMigrations: executedMigrations.length
+      });
+    } else {
+      // Validate all pending migrations
+      const executed = await getExecutedMigrations();
+      const available = getMigrationFiles();
+      const pending = available.filter(file => !executed.includes(file));
+      
+      if (pending.length === 0) {
+        return res.json({
+          message: 'No pending migrations to validate',
+          pending: 0,
+          executed: executed.length
+        });
+      }
+      
+      const executedTables = await getExecutedTables();
+      const allMigrationFiles = [];
+      
+      for (const f of pending) {
+        const filePath = path.join(MIGRATIONS_DIR, f);
+        const sql = fs.readFileSync(filePath, 'utf8');
+        allMigrationFiles.push(parseMigrationFile(f, sql));
+      }
+      
+      const results = [];
+      for (const migrationFile of allMigrationFiles) {
+        const validation = await validateDependencies(migrationFile, executedTables, allMigrationFiles);
+        results.push({
+          filename: migrationFile.filename,
+          valid: validation.valid,
+          errors: validation.errors,
+          warnings: validation.warnings,
+          tablesCreated: migrationFile.tablesCreated,
+          dependencies: migrationFile.dependencies.length
+        });
+      }
+      
+      const allValid = results.every(r => r.valid);
+      
+      res.json({
+        allValid,
+        pending: pending.length,
+        executed: executed.length,
+        results,
+        summary: {
+          valid: results.filter(r => r.valid).length,
+          invalid: results.filter(r => !r.valid).length,
+          totalErrors: results.reduce((sum, r) => sum + r.errors.length, 0),
+          totalWarnings: results.reduce((sum, r) => sum + r.warnings.length, 0)
+        }
+      });
+    }
+  } catch (error) {
+    console.error('[test/migration-validation] Error:', error);
+    res.status(500).json({
+      error: `Error validating migrations: ${error.message}`,
+      stack: error.stack
+    });
+  }
+});
+
 // Add advanced simulation routes from testSystem.js
 addTestRoutes(router);
 

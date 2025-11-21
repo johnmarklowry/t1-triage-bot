@@ -19,6 +19,7 @@ const {
  * Lists all sprints and provides options to add new ones
  */
 slackApp.command(getEnvironmentCommand('admin-sprints'), async ({ command, ack, client, logger }) => {
+  // Acknowledge immediately to prevent timeout
   await ack();
   
   try {
@@ -33,8 +34,42 @@ slackApp.command(getEnvironmentCommand('admin-sprints'), async ({ command, ack, 
       return;
     }
     
-    // Get all sprints
-    const sprints = await readSprints();
+    // Get all sprints - format dates as strings
+    // Note: This must complete quickly to avoid trigger_id expiration (3 second limit)
+    let sprints;
+    try {
+      sprints = await readSprints();
+    } catch (sprintError) {
+      logger.error("Error reading sprints:", sprintError);
+      await client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: `Error loading sprints: ${sprintError.message}`
+      });
+      return;
+    }
+    
+    if (!Array.isArray(sprints)) {
+      logger.error("readSprints returned non-array:", sprints);
+      await client.chat.postEphemeral({
+        channel: command.channel_id,
+        user: command.user_id,
+        text: "Error: Invalid sprint data format"
+      });
+      return;
+    }
+    
+    // Format dates consistently (handle both Date objects and strings)
+    const formatDate = (date) => {
+      if (!date) return 'N/A';
+      if (date instanceof Date) {
+        return date.toISOString().split('T')[0]; // YYYY-MM-DD format
+      }
+      if (typeof date === 'string') {
+        return date.split('T')[0]; // Handle ISO strings
+      }
+      return String(date);
+    };
     
     // Build blocks for the modal
     const blocks = [
@@ -49,20 +84,38 @@ slackApp.command(getEnvironmentCommand('admin-sprints'), async ({ command, ack, 
       { type: "divider" }
     ];
     
-    // Add all sprints to the view
-    sprints.forEach((sprint, index) => {
+    // Add all sprints to the view (limit to prevent modal size issues)
+    const maxSprintsToShow = 50; // Slack modal has size limits
+    const sprintsToShow = sprints.slice(0, maxSprintsToShow);
+    
+    sprintsToShow.forEach((sprint, index) => {
+      const startDateStr = formatDate(sprint.startDate);
+      const endDateStr = formatDate(sprint.endDate);
+      
       blocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*${index}: ${sprint.sprintName}*\nDates: ${sprint.startDate} to ${sprint.endDate}`
+          text: `*${index + 1}: ${sprint.sprintName || 'Unnamed Sprint'}*\nDates: ${startDateStr} to ${endDateStr}`
         }
       });
       
-      if (index < sprints.length - 1) {
+      if (index < sprintsToShow.length - 1) {
         blocks.push({ type: "divider" });
       }
     });
+    
+    // Add warning if there are more sprints
+    if (sprints.length > maxSprintsToShow) {
+      blocks.push({ type: "divider" });
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `_Showing first ${maxSprintsToShow} of ${sprints.length} sprints._`
+        }
+      });
+    }
     
     // Add a button to add a new sprint
     blocks.push({ type: "divider" });
@@ -78,16 +131,31 @@ slackApp.command(getEnvironmentCommand('admin-sprints'), async ({ command, ack, 
       ]
     });
     
-    // Open the modal
-    await client.views.open({
-      trigger_id: command.trigger_id,
-      view: {
-        type: "modal",
-        title: { type: "plain_text", text: "Sprint Management" },
-        close: { type: "plain_text", text: "Close" },
-        blocks
+    // Open the modal - ensure trigger_id is still valid
+    // Note: trigger_ids expire after 3 seconds, so we must call this quickly
+    try {
+      await client.views.open({
+        trigger_id: command.trigger_id,
+        view: {
+          type: "modal",
+          title: { type: "plain_text", text: "Sprint Management" },
+          close: { type: "plain_text", text: "Close" },
+          blocks
+        }
+      });
+    } catch (modalError) {
+      // Handle expired trigger_id or other modal errors
+      if (modalError.data && modalError.data.error === 'invalid_trigger') {
+        logger.error("Trigger ID expired, sending message instead:", modalError);
+        await client.chat.postEphemeral({
+          channel: command.channel_id,
+          user: command.user_id,
+          text: "The command timed out. Please try again."
+        });
+      } else {
+        throw modalError; // Re-throw other errors
       }
-    });
+    }
   } catch (error) {
     logger.error("Error handling admin-sprints command:", error);
     await client.chat.postEphemeral({
@@ -612,4 +680,5 @@ slackApp.view('add_member_modal', async ({ ack, body, view, client, logger }) =>
   }
 });
 
+module.exports = {};
 module.exports = {};

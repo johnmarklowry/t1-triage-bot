@@ -118,11 +118,25 @@ async function readSprints() {
 
   try {
     const sprints = await SprintsRepository.getAll();
-    return sprints.map(sprint => ({
-      sprintName: sprint.sprintName,
-      startDate: sprint.startDate,
-      endDate: sprint.endDate
-    }));
+    return sprints.map(sprint => {
+      // Convert Date objects to YYYY-MM-DD strings for consistency
+      const formatDate = (date) => {
+        if (!date) return null;
+        if (date instanceof Date) {
+          return date.toISOString().split('T')[0];
+        }
+        if (typeof date === 'string') {
+          return date.split('T')[0]; // Handle ISO strings
+        }
+        return String(date);
+      };
+      
+      return {
+        sprintName: sprint.sprintName,
+        startDate: formatDate(sprint.startDate),
+        endDate: formatDate(sprint.endDate)
+      };
+    });
   } catch (error) {
     console.error('[readSprints] Database error:', error);
     // Fallback to JSON if database fails

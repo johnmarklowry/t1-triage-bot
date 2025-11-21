@@ -41,7 +41,7 @@ async function getUpcomingSprints() {
  * Checks if an approved override exists in overrides.json and, if so, returns that user.
  * This is now just a wrapper around the centralized getSprintUsers function
  */
-async function getOnCallForSprint(sprintIndex, role, disciplines) {
+async function getOnCallForSprint(sprintIndex=0, role, disciplines) {
   const users = await getSprintUsers(sprintIndex);
   const userId = users[role];
   

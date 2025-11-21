@@ -14,6 +14,14 @@ async function setupDatabase() {
   const isRailway = process.env.RAILWAY_ENVIRONMENT || process.env.DATABASE_URL;
   console.log(`[SETUP] Environment: ${isRailway ? 'Railway' : 'Local'}`);
   
+  // Warn if using custom migrations when Prisma is available
+  const usePrismaMigrations = process.env.USE_PRISMA_MIGRATIONS !== 'false';
+  if (usePrismaMigrations) {
+    console.warn('[SETUP] WARNING: Custom migrations are disabled. Use Prisma Migrate instead.');
+    console.warn('[SETUP] Set USE_PRISMA_MIGRATIONS=false to enable custom migrations.');
+    return;
+  }
+  
   try {
     // Step 1: Run schema migrations
     console.log('[SETUP] Running schema migrations...');

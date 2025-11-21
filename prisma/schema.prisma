@@ -124,3 +124,34 @@ model Migration {
 
   @@map("migrations")
 }
+
+/// Tracks Railway cron trigger executions for notification workflow
+model CronTriggerAudit {
+  id          String    @id @default(uuid()) @db.Uuid
+  triggeredAt DateTime  @default(now()) @map("triggered_at") @db.Timestamptz(6)
+  scheduledAt DateTime? @map("scheduled_at") @db.Timestamptz(6)
+  result      String    @db.VarChar(20) // 'delivered', 'skipped', 'deferred', 'error', 'pending'
+  details     Json?
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  snapshots   NotificationSnapshot[]
+
+  @@index([triggeredAt(sort: Desc)], map: "idx_cron_trigger_audits_triggered_at")
+  @@map("cron_trigger_audits")
+}
+
+/// Stores notification snapshots for deduplication and audit trail
+model NotificationSnapshot {
+  id                  Int              @id @default(autoincrement())
+  capturedAt          DateTime         @default(now()) @map("captured_at") @db.Timestamptz(6)
+  disciplineAssignments Json           @map("discipline_assignments")
+  hash                String
+  deliveryStatus      String           @map("delivery_status") @db.VarChar(20) // 'delivered', 'skipped', 'deferred'
+  deliveryReason      String?          @map("delivery_reason")
+  railwayTriggerId    String?          @map("railway_trigger_id") @db.Uuid
+  nextDelivery        DateTime?        @map("next_delivery") @db.Timestamptz(6)
+  cronTrigger         CronTriggerAudit? @relation(fields: [railwayTriggerId], references: [id], onDelete: SetNull)
+
+  @@index([hash], map: "idx_notification_snapshots_hash")
+  @@index([deliveryStatus], map: "idx_notification_snapshots_status")
+  @@map("notification_snapshots")
+}

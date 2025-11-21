@@ -3,6 +3,7 @@
 
 -- Up -----------------------------------------------------------------------
 
+-- Create cron_trigger_audits table first (referenced by notification_snapshots)
 CREATE TABLE IF NOT EXISTS cron_trigger_audits (
   id UUID PRIMARY KEY,
   triggered_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -4,9 +4,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const { PrismaClient } = require('@prisma/client');
-
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma-client');
 
 function resolveAppEnv() {
   const env = process.env.APP_ENV || process.env.ENVIRONMENT || (process.env.NODE_ENV === 'production' ? 'production' : 'staging');
@@ -41,7 +39,31 @@ async function upsertDisciplines(appEnv, data) {
   try {
     await prisma.$queryRaw`SELECT 1`;
   } catch (e) {
+    if (e.message && e.message.includes('DATABASE_URL')) {
+      throw new Error(
+        `[seed] DATABASE_URL environment variable is not set. ` +
+        `Please set DATABASE_URL in your .env file or environment. ` +
+        `See env.example for configuration options.`
+      );
+    }
     throw new Error(`[seed] Database not reachable: ${e.message}`);
+  }
+
+  // Check if discipline table exists
+  try {
+    await prisma.$queryRaw`SELECT 1 FROM discipline LIMIT 1`;
+  } catch (e) {
+    if (e.message && (e.message.includes('does not exist') || e.message.includes('relation') && e.message.includes('discipline'))) {
+      throw new Error(
+        `[seed] The 'discipline' table does not exist in the database.\n` +
+        `This table should be created by Prisma migrations.\n\n` +
+        `To fix this, run migrations:\n` +
+        `  npx prisma migrate deploy    # For production/staging\n` +
+        `  npx prisma migrate dev       # For development (creates migration if needed)\n\n` +
+        `Original error: ${e.message}`
+      );
+    }
+    throw e;
   }
 
   for (const role of roles) {

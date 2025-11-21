@@ -13,7 +13,9 @@
     "prisma:migrate:deploy": "npx prisma migrate deploy",
     "prisma:validate": "npx prisma validate",
     "prisma:format": "npx prisma format",
-    "prisma:seed": "node scripts/prisma-seed.js"
+    "prisma:seed": "node scripts/prisma-seed.js",
+    "prisma:seed:sprints": "node scripts/prisma-seed-sprints.js",
+    "prisma:seed:users": "node scripts/prisma-seed-users.js"
   },
   "dependencies": {
     "@fastify/formbody": "^7.4.0",

@@ -17,6 +17,8 @@ Auto-generated from all feature plans. Last updated: 2025-11-06
 - PostgreSQL database (009-fix-migration-dependencies)
 - Node.js 18+ (CommonJS) + Prisma CLI and Client (`prisma`, `@prisma/client`), PostgreSQL (010-prisma-orm)
 - PostgreSQL (Railway production), developer local Postgres (010-prisma-orm)
+- Node.js >=18.0.0, JavaScript (CommonJS) + Prisma 5.22.0, @prisma/client 5.22.0, PostgreSQL (via pg 8.11.3) (011-refactor-prisma-schema)
+- PostgreSQL database (connection via DATABASE_URL environment variable) (011-refactor-prisma-schema)
 
 - Node.js 18+ (matches existing project runtime) + Existing project dependencies (no new runtime dependencies required); Bash scripts for workflow automation (001-add-speckit)
 
@@ -36,9 +38,9 @@ tests/
 Node.js 18+ (matches existing project runtime): Follow standard conventions
 
 ## Recent Changes
+- 011-refactor-prisma-schema: Added Node.js >=18.0.0, JavaScript (CommonJS) + Prisma 5.22.0, @prisma/client 5.22.0, PostgreSQL (via pg 8.11.3)
 - 010-prisma-orm: Added Node.js 18+ (CommonJS) + Prisma CLI and Client (`prisma`, `@prisma/client`), PostgreSQL
 - 009-fix-migration-dependencies: Added Node.js 18+ (CommonJS) + pg (PostgreSQL client), pg-pool (connection pooling)
-- 004-notification-updates: Added Node.js 18 + `@slack/web-api`, `dayjs` with timezone plugin, custom repository layer
 
 
 <!-- MANUAL ADDITIONS START -->

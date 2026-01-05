@@ -36,3 +36,10 @@
 - Success criteria are measurable and technology-agnostic
 - No clarifications needed
 
+
+
+
+
+
+
+

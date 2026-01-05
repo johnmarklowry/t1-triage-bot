@@ -89,6 +89,7 @@ function splitSQLStatements(sql) {
   let insideDollarQuote = false;
   let dollarTag = '';
   let i = 0;
+  let parenDepth = 0; // Track parentheses depth for CHECK constraints, etc.
 
   while (i < sql.length) {
     const char = sql[i];
@@ -128,8 +129,29 @@ function splitSQLStatements(sql) {
       continue;
     }
 
-    // Outside dollar-quotes, split on semicolons
-    if (char === ';') {
+    // Track parentheses depth (for CHECK constraints, function calls, etc.)
+    if (char === '(') {
+      parenDepth++;
+    } else if (char === ')') {
+      parenDepth--;
+    }
+
+    // Skip comment lines (lines starting with --)
+    // Check if we're at the start of a line and the line is a comment
+    if ((currentStatement.trim() === '' || currentStatement.endsWith('\n')) && char === '-' && nextChar === '-') {
+      // Skip to end of line
+      while (i < sql.length && sql[i] !== '\n') {
+        i++;
+      }
+      // Skip the newline character itself
+      if (i < sql.length && sql[i] === '\n') {
+        i++;
+      }
+      continue;
+    }
+
+    // Outside dollar-quotes, split on semicolons (but only if not inside parentheses)
+    if (char === ';' && parenDepth === 0) {
       currentStatement = currentStatement.trim();
       if (currentStatement.length > 0 && !currentStatement.startsWith('--')) {
         statements.push(currentStatement);

@@ -238,3 +238,10 @@ All model and field names will use `@@map` and `@map` attributes to maintain bac
 - Application code can be gradually updated to use new Prisma client types
 - Optional future migration to rename database objects if desired
 
+
+
+
+
+
+
+

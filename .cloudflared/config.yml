@@ -1,0 +1,25 @@
+# Cloudflare Tunnel Configuration
+# 
+# For quick setup (temporary tunnel):
+#   Just run: cloudflared tunnel --url http://localhost:3000
+#
+# For persistent tunnel setup:
+#   1. Run: cloudflared tunnel login
+#   2. Run: cloudflared tunnel create t1-triage-bot
+#   3. Replace YOUR_TUNNEL_ID below with the tunnel ID from step 2
+#   4. Update credentials-file path with the actual tunnel ID
+#   5. For custom domain, replace YOUR_DOMAIN with your subdomain
+#      (or remove hostname line to use trycloudflare.com)
+
+tunnel: YOUR_TUNNEL_ID
+credentials-file: /Users/natlubec/_po/t1-triage-bot/.cloudflared/YOUR_TUNNEL_ID.json
+
+ingress:
+  # Forward all traffic to local server
+  # Remove hostname line to use trycloudflare.com (free, no setup)
+  # Or set a custom hostname if you've configured DNS
+  - hostname: YOUR_DOMAIN.trycloudflare.com
+    service: http://localhost:3000
+  # Catch-all rule (must be last)
+  - service: http_status:404
+

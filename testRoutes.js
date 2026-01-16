@@ -1102,7 +1102,7 @@ router.get('/home-tab', async (req, res) => {
     }
     
     // Build normal home view with available data
-    const homeView = buildHomeView(current, next, disciplines);
+    const homeView = await buildHomeView(current, next, disciplines);
     
     res.json({
       state,

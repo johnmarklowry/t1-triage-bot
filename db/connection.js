@@ -4,7 +4,14 @@
  * Supports Railway DATABASE_URL format and individual environment variables
  */
 const { Pool } = require('pg');
-require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
+
+// Load environment variables: .env first, then .env.local (if exists) overrides
+require('dotenv').config(); // Load .env
+if (fs.existsSync(path.join(__dirname, '..', '.env.local'))) {
+  require('dotenv').config({ path: '.env.local', override: true }); // Override with .env.local
+}
 
 let pool = null;
 

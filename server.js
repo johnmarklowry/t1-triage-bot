@@ -16,7 +16,7 @@ require('./botMentionHandler');
 // require Schedule Command Handler for date-based queries
 require('./scheduleCommandHandler');
 
-// Import our Slack Bolt app and its receiver (which is an Express app)
+// Import our Slack Bolt app, its receiver, and receiver mode
 const { slackApp, receiver, receiverMode } = require('./appHome');
 
 // Import database modules
@@ -55,8 +55,9 @@ app.get('/', async (req, res) => {
   }
 });
 
-// IMPORTANT: Mount the Slack receiver's Express instance
-if (receiverMode === 'http') {
+// IMPORTANT: Mount the Slack receiver's Express instance only in HTTP mode.
+// In Socket Mode, Slack events come over websockets; Express is still used for healthchecks/jobs.
+if (receiverMode === 'http' && receiver && receiver.app) {
   app.use(receiver.app);
 }
 
@@ -94,16 +95,16 @@ async function initializeServer() {
       console.error('[SERVER] Database connection failed, but continuing with fallback to JSON files');
     }
     
-    // Start Slack socket mode receiver if enabled
+    // Start Slack Socket Mode if enabled (Express still starts regardless for healthcheck/jobs).
     if (receiverMode === 'socket') {
       await slackApp.start();
       console.log('[SERVER] Slack app started in Socket Mode');
     }
 
-    // Start the combined server on process.env.PORT (Glitch uses this port)
+    // Start the combined server on process.env.PORT
     const port = process.env.PORT || 3000;
     app.listen(port, () => {
-      console.log(`Combined server is running on port ${port}`);
+      console.log(`Server is running on port ${port}`);
       scheduleDailyJobs();
     });
     
@@ -111,7 +112,7 @@ async function initializeServer() {
     console.error('[SERVER] Initialization failed:', error);
     console.log('[SERVER] Starting server with fallback to JSON files...');
     
-    // Start Slack socket mode receiver if enabled (best effort)
+    // Start Slack Socket Mode (best effort)
     if (receiverMode === 'socket') {
       try {
         await slackApp.start();
@@ -124,7 +125,7 @@ async function initializeServer() {
     // Start server anyway with JSON fallback
     const port = process.env.PORT || 3000;
     app.listen(port, () => {
-      console.log(`Combined server is running on port ${port} (JSON fallback mode)`);
+      console.log(`Server is running on port ${port} (JSON fallback mode)`);
       scheduleDailyJobs();
     });
   }

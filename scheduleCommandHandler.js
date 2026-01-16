@@ -195,6 +195,34 @@ slackApp.view('schedule_date_modal', async ({ ack, body, view, client, logger })
       return;
     }
 
+    // Immediately update the existing modal to a lightweight loading view.
+    // This avoids relying on trigger_id (which can expire quickly) and improves perceived responsiveness.
+    try {
+      await client.views.update({
+        view_id: body.view.id,
+        hash: body.view.hash,
+        view: {
+          type: "modal",
+          callback_id: "schedule_loading_modal",
+          title: { type: "plain_text", text: "Triage Schedule" },
+          close: { type: "plain_text", text: "Close" },
+          blocks: [
+            {
+              type: "header",
+              text: { type: "plain_text", text: "Loading schedule..." }
+            },
+            {
+              type: "section",
+              text: { type: "mrkdwn", text: `Fetching assignments for *${formatPTDate(selectedDate, 'MM/DD/YYYY')}*...` }
+            }
+          ]
+        }
+      });
+    } catch (updateError) {
+      logger.warn("Failed to update schedule modal to loading state:", updateError);
+      // Continue anyway; we can still attempt to update later.
+    }
+
     // Find sprint for the selected date
     const sprint = await findSprintForDate(selectedDate);
     
@@ -216,8 +244,9 @@ slackApp.view('schedule_date_modal', async ({ ack, body, view, client, logger })
     // Build and display the schedule modal
     const scheduleModal = buildScheduleModal(selectedDate, sprint, userNames);
     
-    await client.views.open({
-      trigger_id: body.trigger_id,
+    await client.views.update({
+      view_id: body.view.id,
+      hash: body.view.hash,
       view: scheduleModal
     });
     

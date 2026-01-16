@@ -161,13 +161,15 @@ Forwarding  https://abc123.ngrok.io -> http://localhost:3000
 
 ### 4. Configure Environment Variables
 
-Create a `.env` file (or copy from `env.example`):
+Create a `.env.local` file (or copy from `env.example`):
 
 ```bash
-cp env.example .env
+cp env.example .env.local
 ```
 
-Update `.env` with your local values:
+**Note:** The app loads `.env` first, then `.env.local` (if it exists), with `.env.local` values overriding `.env`. For local development, use `.env.local` which is already in `.gitignore`.
+
+Update `.env.local` with your local values:
 
 ```env
 # Slack Configuration
@@ -240,25 +242,56 @@ In VS Code:
    - Check if database is accessible from your machine
    - For Railway database, ensure your IP is whitelisted (if required)
 
-### Using Socket Mode (Alternative to ngrok)
+### Using Socket Mode (Alternative to ngrok/Cloudflare Tunnel)
 
-Socket Mode is recommended for local development (no tunnel needed):
+Socket Mode is now fully supported and allows local development without needing to set up tunnels or configure Request URLs in Slack app settings. Socket Mode automatically connects to Slack via WebSocket, eliminating the need for public URLs.
 
-1. Enable Socket Mode in your Slack app settings
-2. Get your App-Level Token (starts with `xapp-`)
-3. Set `SLACK_APP_TOKEN` in your `.env` (starts with `xapp-`)
-4. Ensure `NODE_ENV=development` (default in `env.example`)
-5. Start the app (Socket Mode will be used automatically when `SLACK_APP_TOKEN` is present):
+**To enable Socket Mode:**
 
-```bash
-npm start
+1. **Enable Socket Mode in your Slack app settings:**
+   - Go to https://api.slack.com/apps
+   - Select your app
+   - Go to **Features > Socket Mode**
+   - Enable Socket Mode
+
+2. **Create an App-Level Token:**
+   - In the Socket Mode settings, click **Generate Token**
+   - Give it a name (e.g., "Local Development")
+   - Select scopes: `connections:write`
+   - Copy the token (starts with `xapp-`)
+
+3. **Set the token in your `.env.local` file:**
+   ```env
+   SLACK_APP_TOKEN=xapp-your-app-token-here
+   ```
+   
+   **Note:** Use `.env.local` for local development (it's gitignored). The app loads `.env` first, then `.env.local` overrides it.
+
+4. **Start the application:**
+   ```bash
+   npm start
+   ```
+
+The app will automatically detect `SLACK_APP_TOKEN` and use Socket Mode. You should see:
+```
+[appHome] Using Socket Mode (SLACK_APP_TOKEN present)
+[SERVER] Slack app started in Socket Mode
 ```
 
-To force HTTP mode locally (for ngrok/cloudflared testing), set:
+**Benefits of Socket Mode:**
+- No tunnel setup required (no ngrok or Cloudflare Tunnel needed)
+- No Request URL configuration in Slack app settings
+- Works behind firewalls and NAT
+- Same URL every time (no URL changes)
+- Supports all Slack events and interactions
 
-```env
-SOCKET_MODE=false
-```
+**Note:** Socket Mode is automatically enabled when `SLACK_APP_TOKEN` is set (in `NODE_ENV=development`) unless you set `SOCKET_MODE=false` to force HTTP mode for ngrok/cloudflared testing.
+
+**Environment File Loading:**
+- The app loads `.env` first (for shared/default values)
+- Then loads `.env.local` if it exists (for local overrides, gitignored)
+- Values in `.env.local` override values in `.env`
+- Use `.env.local` for local development to keep your local credentials separate
 
 ## Troubleshooting
 

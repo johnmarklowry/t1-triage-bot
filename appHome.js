@@ -26,6 +26,22 @@ const { getEnvironmentCommand } = require('./commandUtils');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
+function createNoopSlackApp() {
+  const noop = () => {};
+  // Provide the common Bolt registration methods so modules can require() safely in test mode.
+  return {
+    command: noop,
+    action: noop,
+    view: noop,
+    shortcut: noop,
+    options: noop,
+    event: noop,
+    message: noop,
+    error: noop,
+    start: async () => {}
+  };
+}
+
 /**
  * Get upcoming sprints from today onward.
  */
@@ -110,6 +126,7 @@ async function getCurrentOnCall() {
     }
     
     return {
+      sprintIndex: currentState.sprintIndex,
       sprintName: curSprint.sprintName,
       startDate: curSprint.startDate,
       endDate: curSprint.endDate,
@@ -168,6 +185,7 @@ async function getNextOnCall() {
     }
   
     return {
+      sprintIndex: nextIndex,
       sprintName: nextSprint.sprintName,
       startDate: nextSprint.startDate,
       endDate: nextSprint.endDate,
@@ -190,16 +208,7 @@ const ROLE_DISPLAY = {
   beEng: "BE Engineer"
 };
 
-/**
- * Role icons for visual distinction
- */
-const ROLE_ICONS = {
-  account: "👤",
-  producer: "🎬",
-  po: "📋",
-  uiEng: "🎨",
-  beEng: "⚙️"
-};
+// NOTE: Role icons removed (no emojis in user-facing surfaces).
 
 /**
  * Build a header block with consistent styling.
@@ -319,6 +328,7 @@ function getUserOnCallStatus(userId, currentRotation) {
     role: userOnCall.role,
     roleDisplay: ROLE_DISPLAY[userOnCall.role] || userOnCall.role,
     timeRemaining: formatTimeRemaining(currentRotation.endDate),
+    sprintIndex: currentRotation.sprintIndex,
     sprintName: currentRotation.sprintName,
     endDate: currentRotation.endDate
   };
@@ -459,12 +469,11 @@ function buildCompactRotationCard(rotation, highlightUserId = null) {
   const fields = [];
   sortedUsers.forEach(u => {
     const displayRole = ROLE_DISPLAY[u.role] || u.role;
-    const icon = ROLE_ICONS[u.role] || '';
     const isHighlighted = highlightUserId && u.slackId === highlightUserId;
-    const prefix = isHighlighted ? '👉 ' : '';
+    const suffix = isHighlighted ? ' (you)' : '';
     fields.push({
       type: 'mrkdwn',
-      text: `${prefix}${icon} *${displayRole}:*\n<@${u.slackId}>`
+      text: `*${displayRole}:*\n<@${u.slackId}>${suffix}`
     });
   });
   
@@ -502,7 +511,7 @@ function buildCurrentRotationBlocks(cur, highlightUserId = null) {
     type: 'section',
     text: {
       type: 'mrkdwn',
-      text: `*${cur.sprintName}*\n📅 ${startFormatted} - ${endFormatted} • ⏰ ${formatTimeRemaining(cur.endDate)}`
+      text: `*${cur.sprintName}*\n${startFormatted} - ${endFormatted} • ${formatTimeRemaining(cur.endDate)}`
     }
   });
   
@@ -557,7 +566,7 @@ function buildNextRotationBlocks(nxt, highlightUserId = null) {
   blocks.push(...buildCompactRotationCard(nxt, highlightUserId));
   
   // Add days until context
-  blocks.push(buildContextBlock(`📅 ${formatDaysUntil(nxt.startDate)}`));
+  blocks.push(buildContextBlock(formatDaysUntil(nxt.startDate)));
   
   return blocks;
 }
@@ -579,14 +588,14 @@ function buildPersonalStatusCard(userId, onCallStatus, nextShift) {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `🟢 *You are currently on call*\n*Role:* ${onCallStatus.roleDisplay} | *Sprint:* ${onCallStatus.sprintName}\n*Time remaining:* ${onCallStatus.timeRemaining}`
+        text: `*You are currently on call*\n*Role:* ${onCallStatus.roleDisplay} | *Sprint:* ${onCallStatus.sprintName}\n*Time remaining:* ${onCallStatus.timeRemaining}`
       },
       accessory: {
         type: 'button',
-        text: { type: 'plain_text', text: 'Request Coverage', emoji: true },
+        text: { type: 'plain_text', text: 'Request Coverage' },
         style: 'primary',
         action_id: 'request_coverage_from_home',
-        value: JSON.stringify({ userId })
+        value: JSON.stringify({ userId, sprintIndex: onCallStatus.sprintIndex ?? null })
       }
     });
   } else if (nextShift) {
@@ -595,11 +604,11 @@ function buildPersonalStatusCard(userId, onCallStatus, nextShift) {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `⏰ *Your next shift*\n*Role:* ${nextShift.roleDisplay} | *Sprint:* ${nextShift.sprintName}\n*${nextShift.daysUntil}* • ${dayjs(`${nextShift.startDate}T00:00:00-07:00`).format("MMM D")} - ${dayjs(`${nextShift.endDate}T00:00:00-07:00`).format("MMM D")}`
+        text: `*Your next shift*\n*Role:* ${nextShift.roleDisplay} | *Sprint:* ${nextShift.sprintName}\n*${nextShift.daysUntil}* • ${dayjs(`${nextShift.startDate}T00:00:00-07:00`).format("MMM D")} - ${dayjs(`${nextShift.endDate}T00:00:00-07:00`).format("MMM D")}`
       },
       accessory: {
         type: 'button',
-        text: { type: 'plain_text', text: 'Request Coverage', emoji: true },
+        text: { type: 'plain_text', text: 'Request Coverage' },
         style: 'primary',
         action_id: 'request_coverage_from_home',
         value: JSON.stringify({ userId, sprintIndex: nextShift.sprintIndex })
@@ -611,7 +620,7 @@ function buildPersonalStatusCard(userId, onCallStatus, nextShift) {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `✅ *You are not currently on call*\nNo upcoming shifts scheduled.`
+        text: `*You are not currently on call*\nNo upcoming shifts scheduled.`
       }
     });
   }
@@ -647,11 +656,11 @@ function buildUserUpcomingShiftsBlocks(upcomingShifts, userId) {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `*${shift.sprintName}*\n${ROLE_ICONS[shift.role] || ''} ${shift.roleDisplay} • ${startFormatted} - ${endFormatted} • ${shift.daysUntil}`
+          text: `*${shift.sprintName}*\n${shift.roleDisplay} • ${startFormatted} - ${endFormatted} • ${shift.daysUntil}`
       },
       accessory: {
         type: 'button',
-        text: { type: 'plain_text', text: 'Request Coverage', emoji: true },
+          text: { type: 'plain_text', text: 'Request Coverage' },
         action_id: 'request_coverage_from_home',
         value: JSON.stringify({ userId, sprintIndex: shift.sprintIndex })
       }
@@ -668,29 +677,29 @@ function buildUserUpcomingShiftsBlocks(upcomingShifts, userId) {
  * @param {boolean} isOnCall - Whether user is currently on call
  * @returns {Object} Actions block with quick action buttons
  */
-function buildQuickActionsBlock(userId, hasUpcomingShifts, isOnCall) {
+function buildQuickActionsBlock(userId, hasUpcomingShifts, isOnCall, sprintIndex = null) {
   const elements = [];
   
   if (isOnCall || hasUpcomingShifts) {
     elements.push({
       type: 'button',
-      text: { type: 'plain_text', text: 'Request Coverage', emoji: true },
+      text: { type: 'plain_text', text: 'Request Coverage' },
       style: 'primary',
       action_id: 'request_coverage_from_home',
-      value: JSON.stringify({ userId })
+      value: JSON.stringify({ userId, sprintIndex })
     });
   }
   
   elements.push({
     type: 'button',
-    text: { type: 'plain_text', text: 'View My Schedule', emoji: true },
+    text: { type: 'plain_text', text: 'View My Schedule' },
     action_id: 'view_my_schedule',
     value: JSON.stringify({ userId })
   });
   
   elements.push({
     type: 'button',
-    text: { type: 'plain_text', text: 'View All Sprints', emoji: true },
+    text: { type: 'plain_text', text: 'View All Sprints' },
     action_id: 'open_upcoming_sprints'
   });
   
@@ -854,12 +863,17 @@ async function buildHomeView(current, next, disciplines, userId = null, onCallSt
   
   // Build quick actions
   const quickActionsBlock = userId 
-    ? buildQuickActionsBlock(userId, upcomingShifts.length > 0, !!onCallStatus)
+    ? buildQuickActionsBlock(
+        userId,
+        upcomingShifts.length > 0,
+        !!onCallStatus,
+        onCallStatus?.sprintIndex ?? upcomingShifts?.[0]?.sprintIndex ?? null
+      )
     : {
         type: 'actions',
         elements: [{
           type: 'button',
-          text: { type: 'plain_text', text: 'View All Sprints', emoji: true },
+          text: { type: 'plain_text', text: 'View All Sprints' },
           action_id: 'open_upcoming_sprints'
         }]
       };
@@ -869,7 +883,7 @@ async function buildHomeView(current, next, disciplines, userId = null, onCallSt
     const quickActionsElements = quickActionsBlock.elements || [];
     quickActionsElements.push({
       type: 'button',
-      text: { type: 'plain_text', text: 'View Rotation Lists', emoji: true },
+      text: { type: 'plain_text', text: 'View Rotation Lists' },
       action_id: 'view_discipline_lists'
     });
     quickActionsBlock.elements = quickActionsElements;
@@ -954,65 +968,8 @@ function formatCurrentText(cur) {
  * @param {Object} cur - Current rotation data with sprintName, startDate, endDate, and users array
  * @returns {Array<Object>} Array of Slack Block Kit blocks
  */
-function buildCurrentRotationBlocks(cur) {
-  if (!cur) {
-    return [
-      {
-        type: 'section',
-        text: { type: 'mrkdwn', text: '_No active sprint found._' }
-      }
-    ];
-  }
-
-  const blocks = [];
-  
-  // Header block for section title
-  blocks.push(buildHeaderBlock('Current On-Call Rotation'));
-  
-  // Section block with fields for sprint name and dates
-  const startFormatted = dayjs(`${cur.startDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
-  const endFormatted = dayjs(`${cur.endDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
-  
-  blocks.push({
-    type: 'section',
-    fields: [
-      {
-        type: 'mrkdwn',
-        text: `*Sprint:*\n${cur.sprintName}`
-      },
-      {
-        type: 'mrkdwn',
-        text: `*Start Date:*\n${startFormatted}`
-      },
-      {
-        type: 'mrkdwn',
-        text: `*End Date:*\n${endFormatted}`
-      }
-    ]
-  });
-  
-  // Context block for date range
-  blocks.push(buildContextBlock(`${startFormatted} to ${endFormatted}`));
-  
-  // Section blocks for user roles
-  const roleOrder = ['account', 'producer', 'po', 'uiEng', 'beEng'];
-  const sortedUsers = cur.users.sort((a, b) => {
-    return roleOrder.indexOf(a.role) - roleOrder.indexOf(b.role);
-  });
-  
-  sortedUsers.forEach(u => {
-    const displayRole = ROLE_DISPLAY[u.role] || u.role;
-    blocks.push({
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: `*${displayRole}:* ${u.name} (<@${u.slackId}>)`
-      }
-    });
-  });
-  
-  return blocks;
-}
+// NOTE: Duplicate buildCurrentRotationBlocks(cur) removed.
+// The enhanced version above (buildCurrentRotationBlocks(cur, highlightUserId)) is the single source of truth.
 
 /**
  * Format the Next On-Call Rotation section.
@@ -1316,7 +1273,7 @@ const hasAppToken = !!process.env.SLACK_APP_TOKEN;
 const useSocketMode = isDev && socketModeRequested && hasAppToken;
 
 let receiver = null;
-const receiverMode = useSocketMode ? 'socket' : 'http';
+let receiverMode = useSocketMode ? 'socket' : 'http';
 
 if (useSocketMode) {
   console.log('[appHome] Using Socket Mode (SLACK_APP_TOKEN present)');
@@ -1328,20 +1285,58 @@ if (useSocketMode) {
   console.log('[appHome] Using HTTP mode (ExpressReceiver)');
 }
 
-const slackApp = useSocketMode
-  ? new App({
-      token: process.env.SLACK_BOT_TOKEN,
-      socketMode: true,
-      appToken: process.env.SLACK_APP_TOKEN
-    })
-  : new App({
-      token: process.env.SLACK_BOT_TOKEN,
-      receiver
-    });
+let slackApp;
+const disableSlack =
+  process.env.DISABLE_SLACK === 'true' ||
+  process.env.NODE_ENV === 'test';
 
-// #region agent log
-fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'appHome.js:slackApp_init',message:'Slack app initialized (token type hints)',data:{botTokenPrefix:process.env.SLACK_BOT_TOKEN?String(process.env.SLACK_BOT_TOKEN).slice(0,4):null,botTokenLen:process.env.SLACK_BOT_TOKEN?String(process.env.SLACK_BOT_TOKEN).length:0,appTokenPrefix:process.env.SLACK_APP_TOKEN?String(process.env.SLACK_APP_TOKEN).slice(0,4):null,appTokenLen:process.env.SLACK_APP_TOKEN?String(process.env.SLACK_APP_TOKEN).length:0,socketMode:useSocketMode,receiverMode},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'K'})}).catch(()=>{});
-// #endregion
+if (!process.env.SLACK_BOT_TOKEN) {
+  if (disableSlack) {
+    console.warn('[appHome] SLACK_BOT_TOKEN missing; Slack app disabled (noop) for test/disabled mode');
+    slackApp = createNoopSlackApp();
+    receiver = null;
+    receiverMode = 'disabled';
+  } else {
+    throw new Error('[appHome] SLACK_BOT_TOKEN is required to initialize Slack Bolt App (set DISABLE_SLACK=true to run without Slack in tests).');
+  }
+} else {
+  slackApp = useSocketMode
+    ? new App({
+        token: process.env.SLACK_BOT_TOKEN,
+        socketMode: true,
+        appToken: process.env.SLACK_APP_TOKEN
+      })
+    : new App({
+        token: process.env.SLACK_BOT_TOKEN,
+        receiver
+      });
+}
+
+/**
+ * Open a minimal probe modal first, then update to the real modal.
+ * This isolates trigger/context failures (probe fails) from payload failures (update fails).
+ */
+async function openWithProbe({ client, triggerId, interactivityPointer, probeView, realView, logger, label }) {
+  const probeBytes = Buffer.byteLength(JSON.stringify(probeView || {}), 'utf8');
+  const realBytes = Buffer.byteLength(JSON.stringify(realView || {}), 'utf8');
+  const realBlocksCount = Array.isArray(realView?.blocks) ? realView.blocks.length : -1;
+
+  const openArgs = interactivityPointer
+    ? { interactivity_pointer: interactivityPointer, view: probeView }
+    : { trigger_id: triggerId, view: probeView };
+
+  const openResult = await client.views.open(openArgs);
+
+  await client.views.update({
+    view_id: openResult.view.id,
+    hash: openResult.view.hash,
+    view: realView
+  });
+
+  if (typeof logger?.info === 'function') {
+    logger.info('[appHome] Probe->update succeeded', { label, viewId: openResult?.view?.id });
+  }
+}
 
 /**
  * Action handler: Open Upcoming Sprints Modal.
@@ -1383,10 +1378,22 @@ slackApp.action('open_upcoming_sprints', async ({ ack, body, client, logger }) =
     }
     
     const modalView = await buildUpcomingSprintsModal();
-    
-    await client.views.open({
-      trigger_id: triggerId,
-      view: modalView
+
+    const { buildMinimalDebugModal } = require('./overrideModal');
+    const probeView = buildMinimalDebugModal({
+      title: 'Upcoming Sprints',
+      bodyText: 'Opening upcoming sprints…',
+      callbackId: 'debug_probe_upcoming_sprints'
+    });
+
+    await openWithProbe({
+      client,
+      triggerId,
+      interactivityPointer: null,
+      probeView,
+      realView: modalView,
+      logger,
+      label: 'open_upcoming_sprints'
     });
   } catch (error) {
     logger.error("Error opening upcoming sprints modal:", error, {
@@ -1419,14 +1426,6 @@ slackApp.action('request_coverage_from_home', async ({ ack, body, client, logger
       body?.interactivity?.interactivity_pointer ||
       body?.interactivity_pointer ||
       null;
-
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'appHome.js:request_coverage_from_home:entry',message:'Request coverage action received',data:{hasTriggerId:!!body?.trigger_id,triggerIdPrefix:body?.trigger_id?String(body.trigger_id).slice(0,18):null,triggerIdLen:body?.trigger_id?String(body.trigger_id).length:0,bodyType:body?.type||null,containerType:body?.container?.type||null,viewId:body?.view?.id||null,actionId:body?.actions?.[0]?.action_id||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
-    
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'appHome.js:request_coverage_from_home:interactivity_pointer',message:'Interactivity pointer presence',data:{hasInteractivityPointer:!!interactivityPointer,interactivityPointerPrefix:interactivityPointer?String(interactivityPointer).slice(0,10):null,interactivityPointerLen:interactivityPointer?String(interactivityPointer).length:0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'P1'})}).catch(()=>{});
-    // #endregion
 
     // Get user ID - handle both app home and modal contexts
     let userId = body.user?.id;
@@ -1461,71 +1460,20 @@ slackApp.action('request_coverage_from_home', async ({ ack, body, client, logger
     }
     
     // Import override modal builder
-    const { buildOverrideRequestModal } = require('./overrideModal');
-    const modalView = buildOverrideRequestModal(userId);
-
-    // #region agent log
-    const blocks = Array.isArray(modalView?.blocks) ? modalView.blocks : [];
-    const sprintBlock = blocks.find(b => b && b.block_id === 'sprint_selection');
-    const sprintOptionsCount = sprintBlock?.element?.options?.length ?? -1;
-    fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'appHome.js:request_coverage_from_home:modal_built',message:'Modal built for request coverage',data:{userId,modalCallbackId:modalView?.callback_id||null,blockCount:blocks.length,blockTypes:blocks.map(b=>b?.type).filter(Boolean).slice(0,20),sprintOptionsCount,modalSize:JSON.stringify(modalView).length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
-    
-    // #region agent log
-    const fs = require('fs');
-    const errorLogPath = '/Users/natlubec/_po/t1-triage-bot/.cursor/error.log';
-    console.error('[DEBUG appHome] ===== ABOUT TO OPEN MODAL =====');
-    console.error('[DEBUG appHome] Action:', 'request_coverage_from_home');
-    console.error('[DEBUG appHome] User ID:', userId);
-    console.error('[DEBUG appHome] Trigger ID:', body.trigger_id?.substring(0,30)+'...');
-    console.error('[DEBUG appHome] Modal size:', JSON.stringify(modalView).length);
-    try {
-      fs.writeFileSync(errorLogPath, JSON.stringify({type:'appHome_modal_open',userId:userId,triggerId:body.trigger_id,modalView:modalView,timestamp:new Date().toISOString()}, null, 2));
-    } catch(e) {
-      console.error('[DEBUG appHome] Failed to write error log:', e.message);
-    }
-    // #endregion
+    const { buildOverrideRequestModal, buildOverrideRequestModalForSprint, buildMinimalDebugModal } = require('./overrideModal');
+    const modalView =
+      Number.isFinite(sprintIndex)
+        ? buildOverrideRequestModalForSprint(userId, sprintIndex)
+        : buildOverrideRequestModal(userId);
     
     const triggerId = body.trigger_id;
-
-    const minimalView = {
-      type: "modal",
-      callback_id: "override_minimal_probe",
-      title: { type: "plain_text", text: "Request Coverage" },
-      close: { type: "plain_text", text: "Close" },
-      blocks: [
-        {
-          type: "section",
-          text: { type: "mrkdwn", text: "Opening coverage request..." }
-        }
-      ]
-    };
-
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'appHome.js:request_coverage_from_home:before_views_open',message:'About to call views.open',data:{triggerIdPrefix:triggerId?String(triggerId).slice(0,18):null,modalCallbackId:modalView?.callback_id||null,modalSize:JSON.stringify(modalView).length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-    // #endregion
-
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'appHome.js:request_coverage_from_home:context_ids',message:'Slack interaction context ids',data:{apiAppId:body?.api_app_id||null,teamId:body?.team?.id||body?.user?.team_id||null,enterpriseId:body?.enterprise?.id||null,isEnterpriseInstall:body?.is_enterprise_install||null,userId:body?.user?.id||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
-    // #endregion
-
-    // Probe auth context (helps detect token/app/workspace mismatch).
-    try {
-      const auth = await client.auth.test();
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'appHome.js:request_coverage_from_home:auth_test',message:'client.auth.test result',data:{ok:auth?.ok??true,teamId:auth?.team_id||null,enterpriseId:auth?.enterprise_id||null,userId:auth?.user_id||null,botId:auth?.bot_id||null,url:auth?.url||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
-      // #endregion
-    } catch (authErr) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'appHome.js:request_coverage_from_home:auth_test_failed',message:'client.auth.test failed',data:{errorMessage:authErr?.message||null,code:authErr?.code||null,slackError:authErr?.data?.error||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
-      // #endregion
-    }
+    const minimalView = buildMinimalDebugModal({
+      title: 'Request Coverage',
+      bodyText: 'Opening coverage request…',
+      callbackId: 'override_minimal_probe'
+    });
 
     const tryOpen = async (viewToOpen, attemptLabel) => {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'appHome.js:request_coverage_from_home:views_open_attempt',message:'views.open attempt',data:{attempt:attemptLabel,viewCallbackId:viewToOpen?.callback_id||null,viewSize:JSON.stringify(viewToOpen).length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-      // #endregion
-
       const args = interactivityPointer
         ? { interactivity_pointer: interactivityPointer, view: viewToOpen }
         : { trigger_id: triggerId, view: viewToOpen };
@@ -1538,16 +1486,8 @@ slackApp.action('request_coverage_from_home', async ({ ack, body, client, logger
     try {
       openResult = await tryOpen(minimalView, 'probe_first');
     } catch (openErr) {
-      const slackErr = openErr?.data?.error || null;
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'appHome.js:request_coverage_from_home:probe_first_failed',message:'probe-first views.open failed',data:{slackError:slackErr,errorMessage:openErr?.message||null,code:openErr?.code||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-      // #endregion
       throw openErr;
     }
-
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'appHome.js:request_coverage_from_home:probe_first_ok',message:'probe-first views.open succeeded',data:{openedViewId:openResult?.view?.id||null,openedHash:openResult?.view?.hash||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-    // #endregion
 
     try {
       await client.views.update({
@@ -1555,32 +1495,16 @@ slackApp.action('request_coverage_from_home', async ({ ack, body, client, logger
         hash: openResult.view.hash,
         view: modalView
       });
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'appHome.js:request_coverage_from_home:update_ok',message:'views.update to real modal succeeded',data:{viewId:openResult?.view?.id||null,modalCallbackId:modalView?.callback_id||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-      // #endregion
     } catch (updateErr) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'appHome.js:request_coverage_from_home:update_failed',message:'views.update to real modal failed',data:{slackError:updateErr?.data?.error||null,errorMessage:updateErr?.message||null,code:updateErr?.code||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-      // #endregion
       throw updateErr;
     }
+
+    // Probe auth context after we’ve consumed the trigger_id (lower risk of trigger expiry).
+    // If this fails, it should not block the user flow.
+    try {
+      await client.auth.test();
+    } catch {}
   } catch (error) {
-    // #region agent log
-    const useSocketMode = !!process.env.SLACK_APP_TOKEN || process.env.SOCKET_MODE === 'true';
-    console.error('[DEBUG appHome] ===== ERROR DETAILS =====');
-    console.error('[DEBUG appHome] Socket Mode:', useSocketMode);
-    console.error('[DEBUG appHome] Error message:', error.message);
-    console.error('[DEBUG appHome] Error code:', error.code);
-    console.error('[DEBUG appHome] Error data:', JSON.stringify(error.data, null, 2));
-    console.error('[DEBUG appHome] Error response_metadata:', JSON.stringify(error.data?.response_metadata, null, 2));
-    console.error('[DEBUG appHome] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-    console.error('[DEBUG appHome] =========================');
-    // #endregion
-
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'appHome.js:request_coverage_from_home:error',message:'views.open failed for request coverage modal',data:{errorMessage:error?.message||null,errorCode:error?.code||null,slackError:error?.data?.error||null,slackMessages:error?.data?.response_metadata?.messages||null,status:error?.data?.response_metadata?.status||null,hasTriggerId:!!body?.trigger_id,triggerIdPrefix:body?.trigger_id?String(body.trigger_id).slice(0,18):null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-    // #endregion
-
     logger.error("Error opening coverage request modal from home:", error);
     // Try to send ephemeral message as fallback
     try {
@@ -1663,11 +1587,11 @@ slackApp.action('view_my_schedule', async ({ ack, body, client, logger }) => {
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `*${shift.sprintName}*\n${ROLE_ICONS[shift.role] || ''} ${shift.roleDisplay}\n📅 ${startFormatted} - ${endFormatted}\n⏰ ${shift.daysUntil}`
+            text: `*${shift.sprintName}*\n${shift.roleDisplay}\n${startFormatted} - ${endFormatted}\n${shift.daysUntil}`
           },
           accessory: {
             type: 'button',
-            text: { type: 'plain_text', text: 'Request Coverage', emoji: true },
+            text: { type: 'plain_text', text: 'Request Coverage' },
             action_id: 'request_coverage_from_home',
             value: JSON.stringify({ userId, sprintIndex: shift.sprintIndex })
           }
@@ -1704,10 +1628,22 @@ slackApp.action('view_my_schedule', async ({ ack, body, client, logger }) => {
       close: { type: 'plain_text', text: 'Close' },
       blocks
     };
-    
-    await client.views.open({
-      trigger_id: body.trigger_id,
-      view: modalView
+
+    const { buildMinimalDebugModal } = require('./overrideModal');
+    const probeView = buildMinimalDebugModal({
+      title: 'My Schedule',
+      bodyText: 'Opening schedule…',
+      callbackId: 'debug_probe_my_schedule'
+    });
+
+    await openWithProbe({
+      client,
+      triggerId: body.trigger_id,
+      interactivityPointer: null,
+      probeView,
+      realView: modalView,
+      logger,
+      label: 'view_my_schedule'
     });
   } catch (error) {
     logger.error("Error opening my schedule modal:", error);
@@ -1811,15 +1747,23 @@ slackApp.action('view_discipline_lists', async ({ ack, body, client, logger }) =
       close: { type: 'plain_text', text: 'Close' },
       blocks: validBlocks
     };
-    
-    try {
-      const result = await client.views.open({
-        trigger_id: triggerId,
-        view: modalView
-      });
-    } catch (openError) {
-      throw openError;
-    }
+
+    const { buildMinimalDebugModal } = require('./overrideModal');
+    const probeView = buildMinimalDebugModal({
+      title: 'Rotation Lists',
+      bodyText: 'Opening rotation lists…',
+      callbackId: 'debug_probe_discipline_lists'
+    });
+
+    await openWithProbe({
+      client,
+      triggerId,
+      interactivityPointer: null,
+      probeView,
+      realView: modalView,
+      logger,
+      label: 'view_discipline_lists'
+    });
   } catch (error) {
     logger.error("Error opening discipline lists modal:", error, {
       errorMessage: error.message,

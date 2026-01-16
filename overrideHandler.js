@@ -7,14 +7,10 @@ const fs = require('fs');
 const path = require('path');
 const { slackApp, receiver } = require('./appHome');
 const { getEnvironmentCommand } = require('./commandUtils');
-const { buildOverrideRequestModal, buildOverrideStep2Modal } = require('./overrideModal');
+const { buildOverrideRequestModal, buildOverrideStep2Modal, buildMinimalDebugModal } = require('./overrideModal');
 
 // Import database repositories
 const { UsersRepository, OverridesRepository } = require('./db/repository');
-
-// #region agent log
-fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideHandler.js:module_load',message:'overrideHandler module loaded',data:{environment:process.env.ENVIRONMENT||null,appEnv:process.env.APP_ENV||null,triageOverrideCmd:getEnvironmentCommand('triage-override')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'J'})}).catch(()=>{});
-// #endregion
 
 // Path to JSON data (kept for fallback)
 const OVERRIDES_FILE = path.join(__dirname, 'overrides.json');
@@ -293,28 +289,6 @@ async function getAllOverrides() {
    (User Flow)
    ========================= */
 slackApp.command(getEnvironmentCommand('triage-override'), async ({ command, ack, client, logger }) => {
-  const fs = require('fs');
-  const logPath = '/Users/natlubec/_po/t1-triage-bot/.cursor/debug.log';
-  const errorLogPath = '/Users/natlubec/_po/t1-triage-bot/.cursor/error.log';
-
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideHandler.js:triage_override:entry',message:'triage-override command received',data:{userId:command.user_id,channelId:command.channel_id,teamId:command.team_id,triggerIdPrefix:command.trigger_id?String(command.trigger_id).slice(0,18):null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
-  // #endregion
-  
-  // #region agent log
-  console.log('[DEBUG overrideHandler] ===== COMMAND HANDLER CALLED =====');
-  console.log('[DEBUG overrideHandler] Command:', getEnvironmentCommand('triage-override'));
-  console.log('[DEBUG overrideHandler] User ID:', command.user_id);
-  console.log('[DEBUG overrideHandler] Trigger ID:', command.trigger_id?.substring(0,30)+'...');
-  try { 
-    fs.writeFileSync(errorLogPath, JSON.stringify({type:'command_received',command:getEnvironmentCommand('triage-override'),userId:command.user_id,triggerId:command.trigger_id,timestamp:new Date().toISOString()}, null, 2));
-    fs.appendFileSync(logPath, JSON.stringify({location:'overrideHandler.js:295',message:'Command received',data:{userId:command.user_id,triggerId:command.trigger_id?.substring(0,20)+'...',timestamp:Date.now()},sessionId:'debug-session',runId:'run1',hypothesisId:'D'}) + '\n'); 
-    console.log('[DEBUG overrideHandler] Log written successfully');
-  } catch(e){ 
-    console.error('[DEBUG overrideHandler] Failed to write log:', e.message, e.stack);
-  }
-  // #endregion
-  
   await ack();
 
   const interactivityPointer =
@@ -322,115 +296,33 @@ slackApp.command(getEnvironmentCommand('triage-override'), async ({ command, ack
     command?.interactivity_pointer ||
     null;
 
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideHandler.js:triage_override:interactivity_pointer',message:'Interactivity pointer presence',data:{hasInteractivityPointer:!!interactivityPointer,interactivityPointerPrefix:interactivityPointer?String(interactivityPointer).slice(0,10):null,interactivityPointerLen:interactivityPointer?String(interactivityPointer).length:0},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'P1'})}).catch(()=>{});
-  // #endregion
-
-  // Probe basic Web API health/auth to distinguish "views.open broken" vs "all Web API broken".
-  try {
-    const apiTest = await client.api.test();
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideHandler.js:triage_override:api_test',message:'client.api.test result',data:{ok:apiTest?.ok??true,error:apiTest?.error||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'L'})}).catch(()=>{});
-    // #endregion
-  } catch (e) {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideHandler.js:triage_override:api_test_failed',message:'client.api.test failed',data:{errorMessage:e?.message||null,code:e?.code||null,slackError:e?.data?.error||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'L'})}).catch(()=>{});
-    // #endregion
-  }
-
-  try {
-    const auth = await client.auth.test();
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideHandler.js:triage_override:auth_test',message:'client.auth.test result',data:{ok:auth?.ok??true,teamId:auth?.team_id||null,enterpriseId:auth?.enterprise_id||null,userId:auth?.user_id||null,botId:auth?.bot_id||null,url:auth?.url||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'M'})}).catch(()=>{});
-    // #endregion
-  } catch (e) {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideHandler.js:triage_override:auth_test_failed',message:'client.auth.test failed',data:{errorMessage:e?.message||null,code:e?.code||null,slackError:e?.data?.error||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'M'})}).catch(()=>{});
-    // #endregion
-  }
-
   // Determine user's role
   const userRole = await getUserRole(command.user_id);
-  
-  // #region agent log
-  try { fs.appendFileSync(logPath, JSON.stringify({location:'overrideHandler.js:299',message:'User role retrieved',data:{userId:command.user_id,userRole:userRole,roleIsNull:userRole===null,timestamp:Date.now()},sessionId:'debug-session',runId:'run1',hypothesisId:'C'}) + '\n'); } catch(e){}
-  // #endregion
 
   // Build the modal for requesting an override
   const modalView = buildOverrideRequestModal(command.user_id);
-  
-  // #region agent log
-  const sprintBlock = (modalView?.blocks || []).find(b => b && b.block_id === 'sprint_selection');
-  const replacementBlock = (modalView?.blocks || []).find(b => b && b.block_id === 'replacement');
-  const sprintOptionsCount = sprintBlock?.element?.options?.length ?? -1;
-  const replacementOptionsCount = replacementBlock?.element?.options?.length ?? -1;
-  const modalSize = JSON.stringify(modalView).length;
-  const sprintOptions = sprintBlock?.element?.options || [];
-  const replacementOptions = replacementBlock?.element?.options || [];
-  const hasInvalidSprintValue = sprintOptions.some(opt => !opt.value || opt.value === 'none');
-  const hasInvalidReplacementValue = replacementOptions.some(opt => !opt.value || opt.value === 'none');
-  try { fs.appendFileSync(logPath, JSON.stringify({location:'overrideHandler.js:301',message:'Modal built - before API call',data:{userId:command.user_id,sprintOptionsCount:sprintOptionsCount,replacementOptionsCount:replacementOptionsCount,modalSize:modalSize,hasSprintOptions:sprintOptionsCount>0,hasReplacementOptions:replacementOptionsCount>0,hasInvalidSprintValue:hasInvalidSprintValue,hasInvalidReplacementValue:hasInvalidReplacementValue,modalStructure:JSON.stringify(modalView).substring(0,500),timestamp:Date.now()},sessionId:'debug-session',runId:'run1',hypothesisId:'A,B,E'}) + '\n'); } catch(e){}
-  // #endregion
 
   try {
-    // #region agent log
-    const triggerAge = Date.now() - (command.trigger_id ? parseInt(command.trigger_id.split('.')[0]) * 1000 : 0);
-    try { fs.appendFileSync(logPath, JSON.stringify({location:'overrideHandler.js:303',message:'About to call views.open',data:{triggerId:command.trigger_id?.substring(0,20)+'...',triggerAge:triggerAge,triggerAgeMs:triggerAge,timestamp:Date.now()},sessionId:'debug-session',runId:'run1',hypothesisId:'D'}) + '\n'); } catch(e){}
-    // #endregion
+    // Open minimal probe first, then update to the real modal.
+    const probeView = buildMinimalDebugModal({
+      title: 'Request Coverage',
+      bodyText: 'Opening coverage request…',
+      callbackId: 'debug_probe_triage_override'
+    });
 
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideHandler.js:triage_override:before_views_open',message:'About to call views.open for triage-override',data:{triggerIdPrefix:command.trigger_id?String(command.trigger_id).slice(0,18):null,modalCallbackId:modalView?.callback_id||null,modalSize:JSON.stringify(modalView).length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
-    // #endregion
+    const openArgs = interactivityPointer
+      ? { interactivity_pointer: interactivityPointer, view: probeView }
+      : { trigger_id: command.trigger_id, view: probeView };
 
-    const result = await client.views.open(
-      interactivityPointer
-        ? { interactivity_pointer: interactivityPointer, view: modalView }
-        : { trigger_id: command.trigger_id, view: modalView }
-    );
-    
-    // #region agent log
-    try { fs.appendFileSync(logPath, JSON.stringify({location:'overrideHandler.js:306',message:'Modal opened successfully',data:{userId:command.user_id,result:JSON.stringify(result),timestamp:Date.now()},sessionId:'debug-session',runId:'run1',hypothesisId:'ALL'}) + '\n'); } catch(e){}
-    fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideHandler.js:triage_override:views_open_ok',message:'views.open succeeded for triage-override',data:{viewId:result?.view?.id||null,modalCallbackId:modalView?.callback_id||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
-    // #endregion
+    const result = await client.views.open(openArgs);
+
+    await client.views.update({
+      view_id: result.view.id,
+      hash: result.view.hash,
+      view: modalView
+    });
   } catch (error) {
-    // #region agent log
-    const useSocketMode = !!process.env.SLACK_APP_TOKEN || process.env.SOCKET_MODE === 'true';
-    const errorLogPath = '/Users/natlubec/_po/t1-triage-bot/.cursor/error.log';
-    const errorDetails = {
-      timestamp: new Date().toISOString(),
-      socketMode: useSocketMode,
-      errorMessage: error.message,
-      errorCode: error.code,
-      errorData: error.data,
-      responseMetadata: error.data?.response_metadata,
-      errorStack: error.stack,
-      modalView: JSON.stringify(modalView)
-    };
-    
-    console.error('[DEBUG overrideHandler] ===== ERROR DETAILS =====');
-    console.error('[DEBUG overrideHandler] Socket Mode:', useSocketMode);
-    console.error('[DEBUG overrideHandler] Error message:', error.message);
-    console.error('[DEBUG overrideHandler] Error code:', error.code);
-    console.error('[DEBUG overrideHandler] Error data:', JSON.stringify(error.data, null, 2));
-    console.error('[DEBUG overrideHandler] Error response_metadata:', JSON.stringify(error.data?.response_metadata, null, 2));
-    console.error('[DEBUG overrideHandler] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-    console.error('[DEBUG overrideHandler] Modal view:', JSON.stringify(modalView, null, 2));
-    console.error('[DEBUG overrideHandler] =========================');
-    
-    // Write to both log files
-    try { 
-      fs.writeFileSync(errorLogPath, JSON.stringify(errorDetails, null, 2));
-      fs.appendFileSync(logPath, JSON.stringify({location:'overrideHandler.js:308',message:'Error caught',data:errorDetails,timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'ALL'}) + '\n'); 
-      console.log('[DEBUG overrideHandler] Error written to:', errorLogPath);
-    } catch(e){ 
-      console.error('[DEBUG overrideHandler] Failed to write error log:', e.message, e.stack);
-    }
-    // #endregion
     logger.error("Error opening override modal:", error);
-
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideHandler.js:triage_override:views_open_failed',message:'views.open failed for triage-override',data:{slackError:error?.data?.error||null,errorMessage:error?.message||null,code:error?.code||null,responseMessages:error?.data?.response_metadata?.messages||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'I'})}).catch(()=>{});
-    // #endregion
 
     // If views.open fails with internal_error, try a simple chat.postMessage to see if other Web API calls succeed.
     if (error?.data?.error === 'internal_error') {
@@ -439,13 +331,7 @@ slackApp.command(getEnvironmentCommand('triage-override'), async ({ command, ack
           channel: command.channel_id,
           text: "Debug: `views.open` returned `internal_error` while opening the override modal."
         });
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideHandler.js:triage_override:chat_postMessage_ok',message:'chat.postMessage succeeded after views.open internal_error',data:{channelId:command.channel_id,ts:msg?.ts||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'N'})}).catch(()=>{});
-        // #endregion
       } catch (e) {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideHandler.js:triage_override:chat_postMessage_failed',message:'chat.postMessage failed after views.open internal_error',data:{errorMessage:e?.message||null,code:e?.code||null,slackError:e?.data?.error||null},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'N'})}).catch(()=>{});
-        // #endregion
       }
     }
   }
@@ -459,8 +345,20 @@ slackApp.shortcut('request_coverage_shortcut', async ({ shortcut, ack, client, l
   try {
     const userId = shortcut.user.id;
     const modalView = buildOverrideRequestModal(userId);
-    await client.views.open({
+    const probeView = buildMinimalDebugModal({
+      title: 'Request Coverage',
+      bodyText: 'Opening coverage request…',
+      callbackId: 'debug_probe_shortcut'
+    });
+
+    const opened = await client.views.open({
       trigger_id: shortcut.trigger_id,
+      view: probeView
+    });
+
+    await client.views.update({
+      view_id: opened.view.id,
+      hash: opened.view.hash,
       view: modalView
     });
   } catch (err) {

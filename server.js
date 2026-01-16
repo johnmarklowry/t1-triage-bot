@@ -99,6 +99,8 @@ async function initializeServer() {
     if (receiverMode === 'socket') {
       await slackApp.start();
       console.log('[SERVER] Slack app started in Socket Mode');
+    } else if (receiverMode === 'disabled') {
+      console.log('[SERVER] Slack app disabled; starting HTTP server for healthchecks/jobs only');
     }
 
     // Start the combined server on process.env.PORT
@@ -120,6 +122,8 @@ async function initializeServer() {
       } catch (socketErr) {
         console.error('[SERVER] Failed to start Slack app in Socket Mode:', socketErr);
       }
+    } else if (receiverMode === 'disabled') {
+      console.log('[SERVER] Slack app disabled (fallback); starting HTTP server for healthchecks/jobs only');
     }
 
     // Start server anyway with JSON fallback

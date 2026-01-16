@@ -11,6 +11,13 @@ dayjs.extend(timezone);
 const DISCIPLINES_FILE = path.join(__dirname, 'disciplines.json');
 const SPRINTS_FILE = path.join(__dirname, 'sprints.json');
 
+function truncatePlainText(text, maxLen = 75) {
+  const str = String(text ?? '');
+  if (str.length <= maxLen) return str;
+  if (maxLen <= 3) return str.slice(0, maxLen);
+  return `${str.slice(0, maxLen - 3)}...`;
+}
+
 /**
  * Helper to load a JSON file.
  */
@@ -63,21 +70,10 @@ function getUserRole(userId) {
  * Uses default rotation logic: assigned user = roleList[sprintIndex % roleList.length].
  */
 function buildUserSprintOptions(requesterSlackId) {
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideModal.js:65',message:'buildUserSprintOptions entry',data:{requesterSlackId:requesterSlackId,timestamp:Date.now()},sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-  // #endregion
-
   const role = getUserRole(requesterSlackId);
   
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideModal.js:67',message:'Role retrieved in buildUserSprintOptions',data:{requesterSlackId:requesterSlackId,role:role,roleIsNull:role===null,timestamp:Date.now()},sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-  // #endregion
-
   if (!role) {
     console.error(`Requester role not found for ${requesterSlackId}`);
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideModal.js:69',message:'Role is null - returning empty array',data:{requesterSlackId:requesterSlackId,timestamp:Date.now()},sessionId:'debug-session',runId:'run1',hypothesisId:'A,C'})}).catch(()=>{});
-    // #endregion
     // Return a fallback option so any caller that renders a select remains valid.
     return [
       {
@@ -90,10 +86,6 @@ function buildUserSprintOptions(requesterSlackId) {
   const disciplines = getDisciplines();
   const roleList = disciplines[role] || [];
   const options = [];
-  
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideModal.js:73',message:'Data loaded for sprint options',data:{sprintsCount:allSprints.length,roleListLength:roleList.length,role:role,timestamp:Date.now()},sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-  // #endregion
 
   // For each sprint, check if the rotation assigns the requester.
   allSprints.forEach((sprint, index) => {
@@ -106,8 +98,10 @@ function buildUserSprintOptions(requesterSlackId) {
         const endFormatted = dayjs(sprint.endDate)
           .tz("America/Los_Angeles")
           .format("MM/DD/YYYY");
+        const sprintName = truncatePlainText(sprint?.sprintName || `Sprint ${index}`, 45);
+        const optionText = truncatePlainText(`${sprintName} (${startFormatted} - ${endFormatted})`, 75);
         options.push({
-          text: { type: "plain_text", text: `${sprint.sprintName} (${startFormatted} - ${endFormatted})` },
+          text: { type: "plain_text", text: optionText },
           value: index.toString()
         });
       }
@@ -121,10 +115,6 @@ function buildUserSprintOptions(requesterSlackId) {
       value: "none"
     });
   }
-  
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideModal.js:102',message:'buildUserSprintOptions exit',data:{optionsCount:options.length,options:JSON.stringify(options).substring(0,300),timestamp:Date.now()},sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-  // #endregion
 
   return options;
 }
@@ -149,19 +139,38 @@ function buildInfoModal({ title, bodyText, closeText = "Close" }) {
 }
 
 /**
+ * buildMinimalDebugModal:
+ * A tiny “always-valid” modal for isolating views.open issues from payload issues.
+ * Keep title <= 24 chars (Slack modal title limit).
+ */
+function buildMinimalDebugModal({
+  title = "Debug",
+  bodyText = "Opening modal…",
+  closeText = "Close",
+  callbackId = "debug_minimal_modal"
+} = {}) {
+  const safeTitle = String(title).slice(0, 24);
+
+  return {
+    type: "modal",
+    callback_id: callbackId,
+    title: { type: "plain_text", text: safeTitle },
+    close: { type: "plain_text", text: closeText },
+    blocks: [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: String(bodyText) }
+      }
+    ]
+  };
+}
+
+/**
  * buildOverrideStep1Modal:
  * Step 1 (choose sprint). No submit button; selecting a sprint triggers views.update to Step 2.
  */
 function buildOverrideStep1Modal(requesterSlackId) {
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideModal.js:buildOverrideStep1Modal',message:'buildOverrideStep1Modal entry',data:{requesterSlackId:requesterSlackId,timestamp:Date.now()},sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-  // #endregion
-
   const role = getUserRole(requesterSlackId);
-  
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideModal.js:buildOverrideStep1Modal',message:'Role in buildOverrideStep1Modal',data:{requesterSlackId:requesterSlackId,role:role,roleIsNull:role===null,timestamp:Date.now()},sessionId:'debug-session',runId:'run1',hypothesisId:'C,F'})}).catch(()=>{});
-  // #endregion
 
   if (!role) {
     return buildInfoModal({
@@ -191,6 +200,9 @@ function buildOverrideStep1Modal(requesterSlackId) {
     callback_id: "override_request_step1",
     private_metadata: privateMetadata,
     title: { type: "plain_text", text: "Request Coverage" },
+    // Slack requirement: any modal with an `input` block MUST define `submit`.
+    // Even though Step 1 transitions on selection (views.update), Slack still enforces this.
+    submit: { type: "plain_text", text: "Next" },
     close: { type: "plain_text", text: "Cancel" },
     blocks: [
       {
@@ -203,6 +215,7 @@ function buildOverrideStep1Modal(requesterSlackId) {
       {
         type: "input",
         block_id: "sprint_selection",
+        dispatch_action: true,
         element: {
           type: "static_select",
           action_id: "sprint_select",
@@ -226,11 +239,6 @@ function buildOverrideStep1Modal(requesterSlackId) {
       }
     ]
   };
-  
-  // #region agent log
-  const modalStr = JSON.stringify(modal);
-  fetch('http://127.0.0.1:7242/ingest/45e398a0-8e28-4077-8fd8-7614c6cc730c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'overrideModal.js:buildOverrideStep1Modal',message:'buildOverrideStep1Modal exit',data:{sprintOptionsCount:sprintOptions.length,modalSize:modalStr.length,privateMetadataSize:privateMetadata.length,hasSprintOptions:sprintOptions.length>0,modalStructure:modalStr.substring(0,500),timestamp:Date.now()},sessionId:'debug-session',runId:'run1',hypothesisId:'A,E'})}).catch(()=>{});
-  // #endregion
 
   return modal;
 }
@@ -303,4 +311,33 @@ function buildOverrideRequestModal(requesterSlackId) {
   return buildOverrideStep1Modal(requesterSlackId);
 }
 
-module.exports = { buildOverrideRequestModal, buildOverrideStep1Modal, buildOverrideStep2Modal };
+/**
+ * buildOverrideRequestModalForSprint:
+ * If we already know the sprintIndex (e.g., from App Home), go straight to Step 2 with sprint preselected.
+ */
+function buildOverrideRequestModalForSprint(requesterSlackId, sprintIndex) {
+  const role = getUserRole(requesterSlackId);
+  const parsedSprintIndex = Number.parseInt(String(sprintIndex), 10);
+
+  if (!role) {
+    return buildInfoModal({
+      title: "Request Coverage",
+      bodyText:
+        "*You’re not currently on a triage rotation list.*\n\nPlease contact an admin to add you to the appropriate role before requesting coverage."
+    });
+  }
+
+  if (!Number.isFinite(parsedSprintIndex)) {
+    return buildOverrideStep1Modal(requesterSlackId);
+  }
+
+  return buildOverrideStep2Modal({ requesterSlackId, role, sprintIndex: parsedSprintIndex });
+}
+
+module.exports = {
+  buildOverrideRequestModal,
+  buildOverrideStep1Modal,
+  buildOverrideStep2Modal,
+  buildOverrideRequestModalForSprint,
+  buildMinimalDebugModal
+};

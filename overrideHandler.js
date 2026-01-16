@@ -2,7 +2,7 @@
  * overrideHandler.js
  * Updated to use PostgreSQL database with transaction support
  ********************************/
-require('dotenv').config();
+require('./loadEnv').loadEnv();
 const fs = require('fs');
 const path = require('path');
 const { slackApp, receiver } = require('./appHome');
@@ -452,7 +452,7 @@ slackApp.action('approve_override', async ({ ack, body, client, logger }) => {
             type: "section",
             text: {
               type: "mrkdwn",
-              text: `:white_check_mark: *Override Approved*\n` +
+              text: `*Override Approved*\n` +
                      `*Sprint Index:* ${overrideInfo.sprintIndex}\n` +
                      `*Role:* ${overrideInfo.role}\n` +
                      `*Requested By:* <@${overrideInfo.requesterId}>\n` +
@@ -502,7 +502,7 @@ slackApp.action('decline_override', async ({ ack, body, client, logger }) => {
             type: "section",
             text: {
               type: "mrkdwn",
-              text: `:x: *Override Declined*\n` +
+              text: `*Override Declined*\n` +
                      `*Sprint Index:* ${overrideInfo.sprintIndex}\n` +
                      `*Role:* ${overrideInfo.role}\n` +
                      `*Requested By:* <@${overrideInfo.requesterId}>\n` +

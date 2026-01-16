@@ -2,7 +2,7 @@
  * appHome.js
  * Updated to ensure consistent data handling
  ********************************/
-require('dotenv').config();
+require('./loadEnv').loadEnv();
 const { App, ExpressReceiver } = require('@slack/bolt');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
@@ -436,7 +436,7 @@ function buildFallbackView(errorMessage = null, errorSource = null) {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `:warning: ${message}\n\nIf this issue persists, please contact your administrator.`
+          text: `Warning: ${message}\n\nIf this issue persists, please contact your administrator.`
         }
       },
       {
@@ -1003,17 +1003,36 @@ async function buildUpcomingSprintsModal() {
   }
 }
 
-// Create a custom ExpressReceiver with endpoint /slack/events
-const receiver = new ExpressReceiver({
-  signingSecret: process.env.SLACK_SIGNING_SECRET,
-  endpoints: '/slack/events'
-});
+const isDev = process.env.NODE_ENV !== 'production';
+const socketModeRequested = process.env.SOCKET_MODE !== 'false';
+const hasAppToken = !!process.env.SLACK_APP_TOKEN;
+const useSocketMode = isDev && socketModeRequested && hasAppToken;
 
-// Create the Bolt app using the custom receiver
-const slackApp = new App({
-  token: process.env.SLACK_BOT_TOKEN,
-  receiver
-});
+let receiver = null;
+let receiverMode = 'socket';
+
+if (useSocketMode) {
+  // Socket Mode (default for local dev when SLACK_APP_TOKEN is set)
+  receiverMode = 'socket';
+} else {
+  // HTTP Mode (required for production unless explicitly configured otherwise)
+  receiverMode = 'http';
+  receiver = new ExpressReceiver({
+    signingSecret: process.env.SLACK_SIGNING_SECRET,
+    endpoints: '/slack/events'
+  });
+}
+
+const slackApp = useSocketMode
+  ? new App({
+      token: process.env.SLACK_BOT_TOKEN,
+      socketMode: true,
+      appToken: process.env.SLACK_APP_TOKEN
+    })
+  : new App({
+      token: process.env.SLACK_BOT_TOKEN,
+      receiver
+    });
 
 /**
  * Action handler: Open Upcoming Sprints Modal.
@@ -1151,6 +1170,7 @@ slackApp.event('app_home_opened', async ({ event, client, logger }) => {
 module.exports = { 
   slackApp, 
   receiver,
+  receiverMode,
   buildHomeView,
   buildFallbackView,
   getCurrentOnCall,

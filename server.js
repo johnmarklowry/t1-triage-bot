@@ -2,7 +2,7 @@
  * server.js
  ********************************/
 const express = require('express');
-require('dotenv').config();
+require('./loadEnv').loadEnv();
 const { scheduleDailyJobs } = require('./triageScheduler');
 const testRoutes = require('./testRoutes');
 require('./adminCommands');
@@ -17,7 +17,7 @@ require('./botMentionHandler');
 require('./scheduleCommandHandler');
 
 // Import our Slack Bolt app and its receiver (which is an Express app)
-const { slackApp, receiver } = require('./appHome');
+const { slackApp, receiver, receiverMode } = require('./appHome');
 
 // Import database modules
 const { testConnection, getHealthStatus } = require('./db/connection');
@@ -56,7 +56,9 @@ app.get('/', async (req, res) => {
 });
 
 // IMPORTANT: Mount the Slack receiver's Express instance
-app.use(receiver.app);
+if (receiverMode === 'http') {
+  app.use(receiver.app);
+}
 
 // Initialize database and start server
 async function initializeServer() {
@@ -92,6 +94,12 @@ async function initializeServer() {
       console.error('[SERVER] Database connection failed, but continuing with fallback to JSON files');
     }
     
+    // Start Slack socket mode receiver if enabled
+    if (receiverMode === 'socket') {
+      await slackApp.start();
+      console.log('[SERVER] Slack app started in Socket Mode');
+    }
+
     // Start the combined server on process.env.PORT (Glitch uses this port)
     const port = process.env.PORT || 3000;
     app.listen(port, () => {
@@ -103,6 +111,16 @@ async function initializeServer() {
     console.error('[SERVER] Initialization failed:', error);
     console.log('[SERVER] Starting server with fallback to JSON files...');
     
+    // Start Slack socket mode receiver if enabled (best effort)
+    if (receiverMode === 'socket') {
+      try {
+        await slackApp.start();
+        console.log('[SERVER] Slack app started in Socket Mode (fallback)');
+      } catch (socketErr) {
+        console.error('[SERVER] Failed to start Slack app in Socket Mode:', socketErr);
+      }
+    }
+
     // Start server anyway with JSON fallback
     const port = process.env.PORT || 3000;
     app.listen(port, () => {

@@ -242,24 +242,23 @@ In VS Code:
 
 ### Using Socket Mode (Alternative to ngrok)
 
-If you prefer not to use ngrok, you can use Slack's Socket Mode:
+Socket Mode is recommended for local development (no tunnel needed):
 
 1. Enable Socket Mode in your Slack app settings
 2. Get your App-Level Token (starts with `xapp-`)
-3. Set `SLACK_APP_TOKEN` in your `.env`
-4. Update `appHome.js` to use Socket Mode:
+3. Set `SLACK_APP_TOKEN` in your `.env` (starts with `xapp-`)
+4. Ensure `NODE_ENV=development` (default in `env.example`)
+5. Start the app (Socket Mode will be used automatically when `SLACK_APP_TOKEN` is present):
 
-```javascript
-const { App } = require('@slack/bolt');
-
-const slackApp = new App({
-  token: process.env.SLACK_BOT_TOKEN,
-  socketMode: true,
-  appToken: process.env.SLACK_APP_TOKEN,
-});
+```bash
+npm start
 ```
 
-Note: Socket Mode doesn't work with ExpressReceiver, so you'd need to refactor the code.
+To force HTTP mode locally (for ngrok/cloudflared testing), set:
+
+```env
+SOCKET_MODE=false
+```
 
 ## Troubleshooting
 

@@ -12,6 +12,28 @@ NC='\033[0m' # No Color
 echo -e "${GREEN}Starting local debugging environment...${NC}"
 echo ""
 
+# Load .env then .env.local into environment (optional, helps detect Socket Mode)
+set -a
+if [ -f ".env" ]; then
+    # shellcheck disable=SC1091
+    source ".env"
+fi
+if [ -f ".env.local" ]; then
+    # shellcheck disable=SC1091
+    source ".env.local"
+fi
+set +a
+
+# If Socket Mode is configured, skip ngrok and just start the server.
+if [ "${NODE_ENV}" != "production" ] && [ -n "${SLACK_APP_TOKEN}" ] && [ "${SOCKET_MODE}" != "false" ]; then
+    echo -e "${GREEN}Socket Mode detected (SLACK_APP_TOKEN set).${NC}"
+    echo "Skipping ngrok. Starting Node.js server..."
+    echo "Press Ctrl+C to stop"
+    echo ""
+    npm start
+    exit 0
+fi
+
 # Check if ngrok is installed
 if ! command -v ngrok &> /dev/null; then
     echo -e "${YELLOW}Error: ngrok is not installed${NC}"

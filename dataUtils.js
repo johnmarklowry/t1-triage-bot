@@ -33,6 +33,11 @@ const OVERRIDES_FILE = path.join(__dirname, "overrides.json");
 // Configuration for dual-write mode (can be disabled after validation)
 const DUAL_WRITE_MODE = process.env.DUAL_WRITE_MODE !== 'false';
 const USE_DATABASE = process.env.USE_DATABASE !== 'false';
+const HAS_DATABASE_URL = !!process.env.DATABASE_URL;
+// Overrides are used to compute on-call assignments; prefer DB when available.
+// To force JSON overrides (not recommended), set OVERRIDES_SOURCE=json.
+// If DB read fails and you want a temporary fallback to JSON, set OVERRIDES_JSON_FALLBACK=true.
+const OVERRIDES_SOURCE = (process.env.OVERRIDES_SOURCE || '').toLowerCase();
 
 /**
  * Format a date consistently using Pacific Time
@@ -301,7 +306,7 @@ async function saveCurrentState(state) {
  * Read overrides from database
  */
 async function readOverrides() {
-  if (!USE_DATABASE) {
+  if (OVERRIDES_SOURCE === 'json' || !HAS_DATABASE_URL) {
     return loadJSON(OVERRIDES_FILE) || [];
   }
 
@@ -321,8 +326,12 @@ async function readOverrides() {
     }));
   } catch (error) {
     console.error('[readOverrides] Database error:', error);
-    // Fallback to JSON if database fails
-    return loadJSON(OVERRIDES_FILE) || [];
+    // Default: do NOT consult JSON when DB is configured, to avoid using stale data.
+    // Optional escape hatch: OVERRIDES_JSON_FALLBACK=true
+    if (process.env.OVERRIDES_JSON_FALLBACK === 'true') {
+      return loadJSON(OVERRIDES_FILE) || [];
+    }
+    return [];
   }
 }
 

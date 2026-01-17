@@ -260,6 +260,26 @@ function buildOverrideStep2Modal({ requesterSlackId, role, sprintIndex }) {
     sprintOptionsAll.find(opt => opt.value === String(sprintIndex)) ||
     sprintOptions[0];
 
+  // If the clicked sprintIndex isn't in the eligible options list (e.g., stale disciplines config),
+  // force-include it so the modal can still preselect the intended sprint.
+  if (!sprintOptionsAll.find(opt => opt.value === String(sprintIndex))) {
+    const allSprints = getAllSprints();
+    const sprint = allSprints?.[Number.parseInt(String(sprintIndex), 10)];
+    if (sprint) {
+      const startFormatted = dayjs(sprint.startDate).tz("America/Los_Angeles").format("MM/DD/YYYY");
+      const endFormatted = dayjs(sprint.endDate).tz("America/Los_Angeles").format("MM/DD/YYYY");
+      const sprintName = truncatePlainText(sprint?.sprintName || `Sprint ${sprintIndex}`, 45);
+      const optionText = truncatePlainText(`${sprintName} (${startFormatted} - ${endFormatted})`, 75);
+      const forced = {
+        text: { type: "plain_text", text: optionText },
+        value: String(sprintIndex)
+      };
+      // Put it at the top (and keep <= 100 options)
+      sprintOptions.unshift(forced);
+      if (sprintOptions.length > 100) sprintOptions.length = 100;
+    }
+  }
+
   return {
     type: "modal",
     callback_id: "override_request_modal",
@@ -276,7 +296,7 @@ function buildOverrideStep2Modal({ requesterSlackId, role, sprintIndex }) {
           action_id: "sprint_select",
           placeholder: { type: "plain_text", text: "Select a sprint" },
           options: sprintOptions,
-          initial_option: initialOption
+          initial_option: sprintOptions.find(opt => opt.value === String(sprintIndex)) || initialOption
         },
         label: { type: "plain_text", text: "Sprint" }
       },

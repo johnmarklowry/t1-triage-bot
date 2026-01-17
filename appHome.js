@@ -844,7 +844,7 @@ async function buildHomeView(current, next, disciplines, userId = null, onCallSt
   
   // Build current rotation blocks (highlight user if on call)
   const highlightUserId = onCallStatus ? userId : null;
-  const currentBlocks = buildCurrentRotationBlocks(current, highlightUserId);
+  const currentBlocks = buildLegacyCurrentRotationSection(current, highlightUserId);
   
   // Build next rotation blocks (highlight user if they're in next sprint)
   let nextHighlightUserId = null;
@@ -959,6 +959,52 @@ function formatCurrentText(cur) {
   });
   
   return text;
+}
+
+/**
+ * buildLegacyCurrentRotationSection:
+ * Hybrid-layout current rotation section matching the legacy home screen style:
+ * - Title line: Current On-Call Rotation
+ * - Sprint name
+ * - Dates label line
+ * - Per-role lines
+ *
+ * Adds a simple "(you)" marker for the highlighted user.
+ */
+function buildLegacyCurrentRotationSection(cur, highlightUserId = null) {
+  if (!cur || !cur.users || cur.users.length === 0) {
+    return [
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: '_No active sprint found._' }
+      }
+    ];
+  }
+
+  const startFormatted = dayjs(`${cur.startDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
+  const endFormatted = dayjs(`${cur.endDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
+
+  const roleOrder = ['account', 'producer', 'po', 'uiEng', 'beEng'];
+  const sortedUsers = [...cur.users].sort((a, b) => roleOrder.indexOf(a.role) - roleOrder.indexOf(b.role));
+
+  const lines = [];
+  lines.push('*Current On-Call Rotation*');
+  lines.push(cur.sprintName);
+  lines.push(`Dates: ${startFormatted} to ${endFormatted}`);
+  lines.push('');
+
+  sortedUsers.forEach(u => {
+    const displayRole = ROLE_DISPLAY[u.role] || u.role;
+    const suffix = highlightUserId && u.slackId === highlightUserId ? ' (you)' : '';
+    lines.push(`${displayRole}: ${u.name} (<@${u.slackId}>)${suffix}`);
+  });
+
+  return [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: lines.join('\n') }
+    }
+  ];
 }
 
 /**
@@ -1436,7 +1482,13 @@ slackApp.action('request_coverage_from_home', async ({ ack, body, client, logger
       try {
         const actionValue = JSON.parse(body.actions[0].value);
         userId = actionValue.userId || userId;
-        sprintIndex = actionValue.sprintIndex || null;
+        const rawSprintIndex = actionValue.sprintIndex;
+        if (rawSprintIndex !== undefined && rawSprintIndex !== null && rawSprintIndex !== '') {
+          const parsedSprintIndex = Number.parseInt(String(rawSprintIndex), 10);
+          sprintIndex = Number.isFinite(parsedSprintIndex) ? parsedSprintIndex : null;
+        } else {
+          sprintIndex = null;
+        }
       } catch (parseError) {
         logger.warn("Could not parse action value:", parseError);
       }

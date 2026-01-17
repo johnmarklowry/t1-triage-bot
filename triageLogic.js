@@ -59,7 +59,7 @@ async function findNextSprint(currentIndex) {
 }
 
 /**
- * loadOverrides: Reads overrides from overrides.json.
+ * loadOverrides: Reads overrides from the primary source (DB when configured, else JSON).
  */
 function loadOverrides() {
   return readOverrides();

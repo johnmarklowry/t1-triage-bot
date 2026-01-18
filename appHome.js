@@ -2,7 +2,7 @@
  * appHome.js
  * Updated to ensure consistent data handling
  ********************************/
-require('dotenv').config();
+require('./loadEnv').loadEnv();
 const { App, ExpressReceiver } = require('@slack/bolt');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
@@ -13,14 +13,34 @@ const {
   readCurrentState,
   readSprints,
   readDisciplines,
+  readOverrides,
   loadJSON,
   getSprintUsers,
   refreshCurrentState,
   OVERRIDES_FILE
 } = require('./dataUtils');
 
+// Import environment-specific command utilities
+const { getEnvironmentCommand } = require('./commandUtils');
+
 dayjs.extend(utc);
 dayjs.extend(timezone);
+
+function createNoopSlackApp() {
+  const noop = () => {};
+  // Provide the common Bolt registration methods so modules can require() safely in test mode.
+  return {
+    command: noop,
+    action: noop,
+    view: noop,
+    shortcut: noop,
+    options: noop,
+    event: noop,
+    message: noop,
+    error: noop,
+    start: async () => {}
+  };
+}
 
 /**
  * Get upcoming sprints from today onward.
@@ -106,6 +126,7 @@ async function getCurrentOnCall() {
     }
     
     return {
+      sprintIndex: currentState.sprintIndex,
       sprintName: curSprint.sprintName,
       startDate: curSprint.startDate,
       endDate: curSprint.endDate,
@@ -164,6 +185,7 @@ async function getNextOnCall() {
     }
   
     return {
+      sprintIndex: nextIndex,
       sprintName: nextSprint.sprintName,
       startDate: nextSprint.startDate,
       endDate: nextSprint.endDate,
@@ -185,6 +207,8 @@ const ROLE_DISPLAY = {
   uiEng: "UI Engineer",
   beEng: "BE Engineer"
 };
+
+// NOTE: Role icons removed (no emojis in user-facing surfaces).
 
 /**
  * Build a header block with consistent styling.
@@ -234,6 +258,203 @@ function buildContextBlock(text) {
 }
 
 /**
+ * Format time remaining until a date
+ * @param {string} endDate - End date in YYYY-MM-DD format
+ * @returns {string} Formatted time remaining (e.g., "2 days, 5 hours remaining" or "Ends today")
+ */
+function formatTimeRemaining(endDate) {
+  const end = dayjs(`${endDate}T23:59:59-07:00`).tz("America/Los_Angeles");
+  const now = dayjs().tz("America/Los_Angeles");
+  const diff = end.diff(now);
+  
+  if (diff < 0) {
+    return "Ended";
+  }
+  
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+  const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  
+  if (days === 0 && hours === 0) {
+    return `Ends in ${minutes} minute${minutes !== 1 ? 's' : ''}`;
+  } else if (days === 0) {
+    return `Ends in ${hours} hour${hours !== 1 ? 's' : ''}`;
+  } else if (days === 1) {
+    return `Ends tomorrow`;
+  } else {
+    return `${days} day${days !== 1 ? 's' : ''} remaining`;
+  }
+}
+
+/**
+ * Format days until a date
+ * @param {string} startDate - Start date in YYYY-MM-DD format
+ * @returns {string} Formatted days until (e.g., "In 3 days" or "Starts tomorrow")
+ */
+function formatDaysUntil(startDate) {
+  const start = dayjs(`${startDate}T00:00:00-07:00`).tz("America/Los_Angeles");
+  const now = dayjs().tz("America/Los_Angeles");
+  const days = start.diff(now, 'day');
+  
+  if (days < 0) {
+    return "Started";
+  } else if (days === 0) {
+    return "Starts today";
+  } else if (days === 1) {
+    return "Starts tomorrow";
+  } else {
+    return `In ${days} days`;
+  }
+}
+
+/**
+ * Get user's on-call status for current rotation
+ * @param {string} userId - Slack user ID
+ * @param {Object|null} currentRotation - Current rotation object or null
+ * @returns {Object|null} Status object with { isOnCall, role, timeRemaining } or null
+ */
+function getUserOnCallStatus(userId, currentRotation) {
+  if (!currentRotation || !userId) {
+    return null;
+  }
+  
+  const userOnCall = currentRotation.users.find(u => u.slackId === userId);
+  if (!userOnCall) {
+    return null;
+  }
+  
+  return {
+    isOnCall: true,
+    role: userOnCall.role,
+    roleDisplay: ROLE_DISPLAY[userOnCall.role] || userOnCall.role,
+    timeRemaining: formatTimeRemaining(currentRotation.endDate),
+    sprintIndex: currentRotation.sprintIndex,
+    sprintName: currentRotation.sprintName,
+    endDate: currentRotation.endDate
+  };
+}
+
+/**
+ * Get user's upcoming shifts (sprints where they are scheduled)
+ * @param {string} userId - Slack user ID
+ * @param {Array} sprints - Array of all sprints
+ * @param {Object} disciplines - Disciplines object with role arrays
+ * @param {Object} [options]
+ * @param {number} [options.limit] - Maximum number of shifts to return (for preview/paging)
+ * @returns {Promise<Array>} Array of upcoming shift objects
+ */
+async function getUserUpcomingShifts(userId, sprints, disciplines, options = {}) {
+  if (!userId || !sprints || !disciplines) {
+    return [];
+  }
+
+  const rawLimit = Number(options?.limit);
+  const limit = Number.isFinite(rawLimit) ? Math.max(1, rawLimit) : null;
+  
+  // Find which role the user is in
+  let userRole = null;
+  let userIndex = -1;
+  
+  for (const [role, roleList] of Object.entries(disciplines)) {
+    const index = roleList.findIndex(u => u.slackId === userId);
+    if (index !== -1) {
+      userRole = role;
+      userIndex = index;
+      break;
+    }
+  }
+  
+  if (!userRole || userIndex === -1) {
+    return [];
+  }
+  
+  const roleList = disciplines[userRole];
+  const upcomingShifts = [];
+  const today = dayjs().tz("America/Los_Angeles");
+
+  // Build lookup for Slack ID -> display name (for nicer team display)
+  const nameBySlackId = {};
+  if (disciplines && typeof disciplines === 'object') {
+    for (const users of Object.values(disciplines)) {
+      if (!Array.isArray(users)) continue;
+      for (const u of users) {
+        if (u?.slackId && u?.name && !nameBySlackId[u.slackId]) {
+          nameBySlackId[u.slackId] = u.name;
+        }
+      }
+    }
+  }
+
+  // Load overrides once (avoid per-sprint reads) and index them for fast lookup
+  const overrides = await readOverrides();
+  const overrideBySprintRole = new Map();
+  for (const o of (Array.isArray(overrides) ? overrides : [])) {
+    if (!o || o.approved !== true) continue;
+    if (o.sprintIndex === null || o.sprintIndex === undefined) continue;
+    if (!o.role) continue;
+    overrideBySprintRole.set(`${o.sprintIndex}:${o.role}`, o);
+  }
+  
+  // Check each sprint to see if user is scheduled
+  for (let i = 0; i < sprints.length; i++) {
+    const sprint = sprints[i];
+    const sprintStart = dayjs(sprint.startDate).tz("America/Los_Angeles");
+    
+    // Only include future sprints
+    if (sprintStart.isAfter(today) || sprintStart.isSame(today, 'day')) {
+      const override = overrideBySprintRole.get(`${i}:${userRole}`) || null;
+
+      // Calculate if user is assigned to this sprint (base rotation)
+      const assignedIndex = i % roleList.length;
+      const isBaseAssigned = assignedIndex === userIndex;
+
+      // Overrides can either remove the user from their base shift, or assign them to cover.
+      const isAssignedByOverride = !!override && override.newSlackId === userId;
+      const isRemovedByOverride = isBaseAssigned && !!override && override.newSlackId !== userId;
+
+      const shouldInclude = (isBaseAssigned && !isRemovedByOverride) || isAssignedByOverride;
+      if (!shouldInclude) continue;
+
+      const sprintUsers = await getSprintUsers(i);
+      const rotationLines = [];
+      for (const role of ["account", "producer", "po", "uiEng", "beEng"]) {
+        const slackId = sprintUsers?.[role] || null;
+        const displayRole = ROLE_DISPLAY[role] || role;
+        if (!slackId) {
+          rotationLines.push(`*${displayRole}*: _Unassigned_`);
+          continue;
+        }
+        const name = nameBySlackId[slackId];
+        const suffix = slackId === userId ? ' (you)' : '';
+        rotationLines.push(
+          name
+            ? `*${displayRole}*: ${name} (<@${slackId}>)${suffix}`
+            : `*${displayRole}*: <@${slackId}>${suffix}`
+        );
+      }
+
+      upcomingShifts.push({
+        sprintIndex: i,
+        sprintName: sprint.sprintName,
+        startDate: sprint.startDate,
+        endDate: sprint.endDate,
+        role: userRole,
+        roleDisplay: ROLE_DISPLAY[userRole] || userRole,
+        daysUntil: formatDaysUntil(sprint.startDate),
+        rotationUsers: sprintUsers || null,
+        rotationText: rotationLines.join('\n')
+      });
+
+      if (limit && upcomingShifts.length >= limit) {
+        break;
+      }
+    }
+  }
+  
+  return upcomingShifts;
+}
+
+/**
  * Build Block Kit blocks for the current rotation section.
  * 
  * Block Kit Best Practices Applied:
@@ -257,8 +478,66 @@ function buildContextBlock(text) {
  * @param {Array<Object>} cur.users - Array of user objects with role, name, and slackId
  * @returns {Array<Object>} Array of Slack Block Kit blocks (header, section with fields, context, user sections)
  */
-function buildCurrentRotationBlocks(cur) {
-  if (!cur) {
+/**
+ * Build compact rotation card showing all roles in a grid layout
+ * @param {Object} rotation - Rotation object with users array
+ * @param {string|null} highlightUserId - User ID to highlight (if they're in this rotation)
+ * @returns {Array<Object>} Array of Block Kit blocks
+ */
+function buildCompactRotationCard(rotation, highlightUserId = null) {
+  if (!rotation) {
+    return [
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: '_No rotation data available._' }
+      }
+    ];
+  }
+  
+  const blocks = [];
+  const startFormatted = dayjs(`${rotation.startDate}T00:00:00-07:00`).format("MMM D");
+  const endFormatted = dayjs(`${rotation.endDate}T00:00:00-07:00`).format("MMM D");
+  
+  // Header with sprint info
+  blocks.push({
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: `*${rotation.sprintName}* • ${startFormatted} - ${endFormatted}`
+    }
+  });
+  
+  // Build compact role display using fields (2 roles per row)
+  const roleOrder = ['account', 'producer', 'po', 'uiEng', 'beEng'];
+  const sortedUsers = rotation.users.sort((a, b) => {
+    return roleOrder.indexOf(a.role) - roleOrder.indexOf(b.role);
+  });
+  
+  // Group users into pairs for fields display
+  const fields = [];
+  sortedUsers.forEach(u => {
+    const displayRole = ROLE_DISPLAY[u.role] || u.role;
+    const isHighlighted = highlightUserId && u.slackId === highlightUserId;
+    const suffix = isHighlighted ? ' (you)' : '';
+    fields.push({
+      type: 'mrkdwn',
+      text: `*${displayRole}:*\n<@${u.slackId}>${suffix}`
+    });
+  });
+  
+  // Split into groups of 2 for fields (max 10 fields per section)
+  for (let i = 0; i < fields.length; i += 2) {
+    blocks.push({
+      type: 'section',
+      fields: fields.slice(i, i + 2)
+    });
+  }
+  
+  return blocks;
+}
+
+function buildCurrentRotationBlocks(cur, highlightUserId = null) {
+  if (!cur || !cur.users || cur.users.length === 0) {
     return [
       {
         type: 'section',
@@ -270,53 +549,24 @@ function buildCurrentRotationBlocks(cur) {
   const blocks = [];
   
   // Block Kit Best Practice: Use header blocks for section titles (visual hierarchy)
-  blocks.push(buildHeaderBlock('Current On-Call Rotation'));
+  blocks.push(buildHeaderBlock('Currently On Call'));
   
-  // Block Kit Best Practice: Use section blocks with fields array for compact side-by-side display
-  // Format dates consistently using Pacific Time timezone
-  const startFormatted = dayjs(`${cur.startDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
-  const endFormatted = dayjs(`${cur.endDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
+  // Add context about the active sprint
+  const startFormatted = dayjs(`${cur.startDate}T00:00:00-07:00`).format("MMM D, YYYY");
+  const endFormatted = dayjs(`${cur.endDate}T00:00:00-07:00`).format("MMM D, YYYY");
   
   blocks.push({
     type: 'section',
-    fields: [
-      {
-        type: 'mrkdwn',
-        text: `*Sprint:*\n${cur.sprintName}` // Bold label for accessibility
-      },
-      {
-        type: 'mrkdwn',
-        text: `*Start Date:*\n${startFormatted}` // Bold label for accessibility
-      },
-      {
-        type: 'mrkdwn',
-        text: `*End Date:*\n${endFormatted}` // Bold label for accessibility
-      }
-    ]
+    text: {
+      type: 'mrkdwn',
+      text: `*${cur.sprintName}*\n${startFormatted} - ${endFormatted} • ${formatTimeRemaining(cur.endDate)}`
+    }
   });
   
-  // Block Kit Best Practice: Use context blocks for secondary metadata (dates, timestamps)
-  blocks.push(buildContextBlock(`${startFormatted} to ${endFormatted}`));
+  blocks.push({ type: 'divider' });
   
-  // Block Kit Best Practice: Individual section blocks for each user role (clear separation)
-  // Sort users by role order for consistent display
-  const roleOrder = ['account', 'producer', 'po', 'uiEng', 'beEng'];
-  const sortedUsers = cur.users.sort((a, b) => {
-    return roleOrder.indexOf(a.role) - roleOrder.indexOf(b.role);
-  });
-  
-  // Accessibility: Each block includes descriptive text (role name + user name + mention)
-  // Not just emoji or icons - screen readers can understand the content
-  sortedUsers.forEach(u => {
-    const displayRole = ROLE_DISPLAY[u.role] || u.role;
-    blocks.push({
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: `*${displayRole}:* ${u.name} (<@${u.slackId}>)` // Bold role, name, and mention
-      }
-    });
-  });
+  // Use compact rotation card to show all team members
+  blocks.push(...buildCompactRotationCard(cur, highlightUserId));
   
   return blocks;
 }
@@ -345,7 +595,7 @@ function buildCurrentRotationBlocks(cur) {
  * @param {Array<Object>} nxt.users - Array of user objects with role, name, and slackId
  * @returns {Array<Object>} Array of Slack Block Kit blocks (header, section with fields, context, user sections)
  */
-function buildNextRotationBlocks(nxt) {
+function buildNextRotationBlocks(nxt, highlightUserId = null) {
   if (!nxt) {
     return [
       {
@@ -358,51 +608,166 @@ function buildNextRotationBlocks(nxt) {
   const blocks = [];
   
   // Header block for section title
-  blocks.push(buildHeaderBlock('Next On-Call Rotation'));
+  blocks.push(buildHeaderBlock('Next Sprint'));
   
-  // Section block with fields for sprint name and dates
-  const startFormatted = dayjs(`${nxt.startDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
-  const endFormatted = dayjs(`${nxt.endDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
+  // Use compact rotation card
+  blocks.push(...buildCompactRotationCard(nxt, highlightUserId));
   
-  blocks.push({
-    type: 'section',
-    fields: [
-      {
-        type: 'mrkdwn',
-        text: `*Sprint:*\n${nxt.sprintName}`
-      },
-      {
-        type: 'mrkdwn',
-        text: `*Start Date:*\n${startFormatted}`
-      },
-      {
-        type: 'mrkdwn',
-        text: `*End Date:*\n${endFormatted}`
-      }
-    ]
-  });
+  // Add days until context
+  blocks.push(buildContextBlock(formatDaysUntil(nxt.startDate)));
   
-  // Context block for date range
-  blocks.push(buildContextBlock(`${startFormatted} to ${endFormatted}`));
+  return blocks;
+}
+
+/**
+ * Build personal status card (hero section)
+ * Shows user's current on-call status or next shift preview
+ * @param {string} userId - Slack user ID
+ * @param {Object|null} onCallStatus - Status from getUserOnCallStatus or null
+ * @param {Object|null} nextShift - First upcoming shift from getUserUpcomingShifts or null
+ * @returns {Array<Object>} Array of Block Kit blocks for personal status card
+ */
+function buildPersonalStatusCard(userId, onCallStatus, nextShift) {
+  const blocks = [];
   
-  // Section blocks for user roles
-  const roleOrder = ['account', 'producer', 'po', 'uiEng', 'beEng'];
-  const sortedUsers = nxt.users.sort((a, b) => {
-    return roleOrder.indexOf(a.role) - roleOrder.indexOf(b.role);
-  });
-  
-  sortedUsers.forEach(u => {
-    const displayRole = ROLE_DISPLAY[u.role] || u.role;
+  if (onCallStatus) {
+    // User is currently on call
     blocks.push({
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `*${displayRole}:* ${u.name} (<@${u.slackId}>)`
+        text: `*You are currently on call*\n*Role:* ${onCallStatus.roleDisplay} | *Sprint:* ${onCallStatus.sprintName}\n*Time remaining:* ${onCallStatus.timeRemaining}`
+      },
+      accessory: {
+        type: 'button',
+        text: { type: 'plain_text', text: 'Request Coverage' },
+        style: 'primary',
+        action_id: 'request_coverage_from_home',
+        value: JSON.stringify({ userId, sprintIndex: onCallStatus.sprintIndex ?? null })
       }
     });
-  });
+  } else if (nextShift) {
+    // User has upcoming shift
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Your next shift*\n*Role:* ${nextShift.roleDisplay} | *Sprint:* ${nextShift.sprintName}\n*${nextShift.daysUntil}* • ${dayjs(`${nextShift.startDate}T00:00:00-07:00`).format("MMM D")} - ${dayjs(`${nextShift.endDate}T00:00:00-07:00`).format("MMM D")}`
+      },
+      accessory: {
+        type: 'button',
+        text: { type: 'plain_text', text: 'Request Coverage' },
+        style: 'primary',
+        action_id: 'request_coverage_from_home',
+        value: JSON.stringify({ userId, sprintIndex: nextShift.sprintIndex })
+      }
+    });
+  } else {
+    // User has no upcoming shifts
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*You are not currently on call*\nNo upcoming shifts scheduled.`
+      }
+    });
+  }
   
   return blocks;
+}
+
+/**
+ * Build user's upcoming shifts section
+ * @param {Array} upcomingShifts - Array of shift objects from getUserUpcomingShifts
+ * @param {string} userId - Slack user ID
+ * @returns {Array<Object>} Array of Block Kit blocks
+ */
+function buildUserUpcomingShiftsBlocks(upcomingShifts, userId) {
+  if (!upcomingShifts || upcomingShifts.length === 0) {
+    return [
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: '_No upcoming shifts scheduled._' }
+      }
+    ];
+  }
+  
+  const blocks = [
+    buildHeaderBlock('Your Upcoming Shifts')
+  ];
+  
+  upcomingShifts.forEach((shift, idx) => {
+    const startFormatted = dayjs(`${shift.startDate}T00:00:00-07:00`).format("MMM D");
+    const endFormatted = dayjs(`${shift.endDate}T00:00:00-07:00`).format("MMM D");
+
+    const teamText = shift.rotationText
+      ? `\n\n*Team on rotation*\n${shift.rotationText}`
+      : '';
+    
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+          text: `*${shift.sprintName}*\n${shift.roleDisplay} • ${startFormatted} - ${endFormatted} • ${shift.daysUntil}${teamText}`
+      },
+      accessory: {
+        type: 'button',
+          text: { type: 'plain_text', text: 'Request Coverage' },
+        action_id: 'request_coverage_from_home',
+        value: JSON.stringify({ userId, sprintIndex: shift.sprintIndex })
+      }
+    });
+
+    if (idx !== upcomingShifts.length - 1) {
+      blocks.push({ type: 'divider' });
+    }
+  });
+  
+  // Safety: keep Home well under Slack’s 50 block limit
+  if (blocks.length > 50) {
+    blocks.splice(50);
+  }
+
+  return blocks;
+}
+
+/**
+ * Build quick actions block
+ * @param {string} userId - Slack user ID
+ * @param {boolean} hasUpcomingShifts - Whether user has upcoming shifts
+ * @param {boolean} isOnCall - Whether user is currently on call
+ * @returns {Object} Actions block with quick action buttons
+ */
+function buildQuickActionsBlock(userId, hasUpcomingShifts, isOnCall, sprintIndex = null) {
+  const elements = [];
+  
+  if (isOnCall || hasUpcomingShifts) {
+    elements.push({
+      type: 'button',
+      text: { type: 'plain_text', text: 'Request Coverage' },
+      style: 'primary',
+      action_id: 'request_coverage_from_home',
+      value: JSON.stringify({ userId, sprintIndex })
+    });
+  }
+  
+  elements.push({
+    type: 'button',
+    text: { type: 'plain_text', text: 'View My Schedule' },
+    action_id: 'view_my_schedule',
+    value: JSON.stringify({ userId })
+  });
+  
+  elements.push({
+    type: 'button',
+    text: { type: 'plain_text', text: 'View All Sprints' },
+    action_id: 'open_upcoming_sprints'
+  });
+  
+  return {
+    type: 'actions',
+    elements
+  };
 }
 
 /**
@@ -436,7 +801,7 @@ function buildFallbackView(errorMessage = null, errorSource = null) {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `:warning: ${message}\n\nIf this issue persists, please contact your administrator.`
+          text: `Warning: ${message}\n\nIf this issue persists, please contact your administrator.`
         }
       },
       {
@@ -479,66 +844,7 @@ function buildFallbackView(errorMessage = null, errorSource = null) {
  * @param {string} discObj[].slackId - User's Slack ID for mentions
  * @returns {Array<Object>} Array of Slack Block Kit blocks (header + discipline sections)
  */
-function buildDisciplineBlocks(discObj) {
-  if (!discObj || Object.keys(discObj).length === 0) {
-    return [
-      {
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: '*Discipline Rotation Lists*\n_Discipline data unavailable._'
-        }
-      }
-    ];
-  }
-  
-  const blocks = [];
-  // Block Kit Best Practice: Use header blocks for section titles (visual hierarchy)
-  blocks.push(buildHeaderBlock('Discipline Rotation Lists'));
-  
-  const roleOrder = ['account', 'producer', 'po', 'uiEng', 'beEng'];
-  let hasAnyDisciplines = false;
-  
-  roleOrder.forEach(role => {
-    if (!discObj[role] || !Array.isArray(discObj[role]) || discObj[role].length === 0) {
-      return;
-    }
-    
-    hasAnyDisciplines = true;
-    const displayRole = ROLE_DISPLAY[role] || role;
-    
-    // Build user list text for this discipline
-    // Accessibility: Include user names and mentions (not just IDs or emoji)
-    let userListText = '';
-    discObj[role].forEach(u => {
-      userListText += `${u.name} (<@${u.slackId}>)\n`; // Name + mention for accessibility
-    });
-    
-    // Block Kit Best Practice: Use section blocks with mrkdwn for formatted lists
-    // Bold role name for visual hierarchy and accessibility
-    blocks.push({
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: `*${displayRole}*\n${userListText}` // Bold role name, then user list
-      }
-    });
-  });
-  
-  if (!hasAnyDisciplines) {
-    return [
-      {
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: '*Discipline Rotation Lists*\n_Discipline data unavailable._'
-        }
-      }
-    ];
-  }
-  
-  return blocks;
-}
+// NOTE: Duplicate buildDisciplineBlocks function removed - using the one at line 1157
 
 /**
  * Build the App Home view using Block Kit.
@@ -583,32 +889,96 @@ function buildDisciplineBlocks(discObj) {
  * const disciplines = { account: [...], producer: [...], ... };
  * const homeView = buildHomeView(current, next, disciplines);
  */
-function buildHomeView(current, next, disciplines) {
-  const currentBlocks = buildCurrentRotationBlocks(current);
-  const nextBlocks = buildNextRotationBlocks(next);
-  const disciplineBlocks = buildDisciplineBlocks(disciplines);
-
-  const blocks = [
-    // Header block for main title
-    buildHeaderBlock('Welcome to the Triage Rotation App Home!'),
-    {
-      type: 'actions',
-      elements: [
-        {
+/**
+ * Build the enhanced App Home view with personalization and improved layout
+ * @param {Object|null} current - Current rotation data
+ * @param {Object|null} next - Next rotation data
+ * @param {Object|null} disciplines - Discipline object
+ * @param {string|null} userId - Slack user ID for personalization
+ * @param {Object|null} onCallStatus - User's on-call status
+ * @param {Array} upcomingShifts - User's upcoming shifts
+ * @returns {Object} Slack Block Kit home view object
+ */
+async function buildHomeView(current, next, disciplines, userId = null, onCallStatus = null, upcomingShifts = []) {
+  // Build personal status card (hero section)
+  const personalStatusBlocks = userId ? buildPersonalStatusCard(userId, onCallStatus, upcomingShifts[0] || null) : [];
+  
+  // Build current rotation blocks (highlight user if on call)
+  const highlightUserId = onCallStatus ? userId : null;
+  const currentBlocks = buildLegacyCurrentRotationSection(current, highlightUserId);
+  
+  // Build next rotation blocks (highlight user if they're in next sprint)
+  let nextHighlightUserId = null;
+  if (userId && next) {
+    const userInNext = next.users.find(u => u.slackId === userId);
+    if (userInNext) {
+      nextHighlightUserId = userId;
+    }
+  }
+  const nextBlocks = buildNextRotationBlocks(next, nextHighlightUserId);
+  
+  // Build user's upcoming shifts section
+  const upcomingShiftsBlocks = userId && upcomingShifts.length > 0 
+    ? buildUserUpcomingShiftsBlocks(upcomingShifts, userId)
+    : [];
+  
+  // Build quick actions
+  const quickActionsBlock = userId 
+    ? buildQuickActionsBlock(
+        userId,
+        upcomingShifts.length > 0,
+        !!onCallStatus,
+        onCallStatus?.sprintIndex ?? upcomingShifts?.[0]?.sprintIndex ?? null
+      )
+    : {
+        type: 'actions',
+        elements: [{
           type: 'button',
-          text: { type: 'plain_text', text: 'View All Upcoming Sprints' },
-          style: 'primary',
+          text: { type: 'plain_text', text: 'View All Sprints' },
           action_id: 'open_upcoming_sprints'
-        }
-      ]
-    },
-    { type: 'divider' },
-    ...currentBlocks,
-    { type: 'divider' },
-    ...nextBlocks,
-    { type: 'divider' },
-    ...disciplineBlocks
-  ];
+        }]
+      };
+  
+  // Add button to view discipline lists (if disciplines available)
+  if (disciplines && Object.keys(disciplines).length > 0) {
+    const quickActionsElements = quickActionsBlock.elements || [];
+    quickActionsElements.push({
+      type: 'button',
+      text: { type: 'plain_text', text: 'View Rotation Lists' },
+      action_id: 'view_discipline_lists'
+    });
+    quickActionsBlock.elements = quickActionsElements;
+  }
+
+  const blocks = [];
+  
+  // Hero section: Personal status (show first if user is on call or has next shift)
+  if (personalStatusBlocks.length > 0) {
+    blocks.push(...personalStatusBlocks);
+    blocks.push({ type: 'divider' });
+  }
+  
+  // Current on-call section - ALWAYS show if there's an active sprint
+  // This shows the full team that's currently on call together
+  if (current && current.users && current.users.length > 0) {
+    blocks.push(...currentBlocks);
+    blocks.push({ type: 'divider' });
+  }
+  
+  // Next sprint section - show next sprint team
+  if (next && next.users && next.users.length > 0) {
+    blocks.push(...nextBlocks);
+    blocks.push({ type: 'divider' });
+  }
+  
+  // User's upcoming shifts (if any) - personal schedule
+  if (upcomingShiftsBlocks.length > 0) {
+    blocks.push(...upcomingShiftsBlocks);
+    blocks.push({ type: 'divider' });
+  }
+  
+  // Quick actions
+  blocks.push(quickActionsBlock);
 
   // Verify block count doesn't exceed Slack API limit
   if (blocks.length > 50) {
@@ -653,14 +1023,17 @@ function formatCurrentText(cur) {
 }
 
 /**
- * Build Block Kit blocks for the current rotation section.
- * Uses header block, section blocks with fields for dates, context block for date range,
- * and section blocks for user roles.
- * @param {Object} cur - Current rotation data with sprintName, startDate, endDate, and users array
- * @returns {Array<Object>} Array of Slack Block Kit blocks
+ * buildLegacyCurrentRotationSection:
+ * Hybrid-layout current rotation section matching the legacy home screen style:
+ * - Title line: Current On-Call Rotation
+ * - Sprint name
+ * - Dates label line
+ * - Per-role lines
+ *
+ * Adds a simple "(you)" marker for the highlighted user.
  */
-function buildCurrentRotationBlocks(cur) {
-  if (!cur) {
+function buildLegacyCurrentRotationSection(cur, highlightUserId = null) {
+  if (!cur || !cur.users || cur.users.length === 0) {
     return [
       {
         type: 'section',
@@ -669,55 +1042,41 @@ function buildCurrentRotationBlocks(cur) {
     ];
   }
 
-  const blocks = [];
-  
-  // Header block for section title
-  blocks.push(buildHeaderBlock('Current On-Call Rotation'));
-  
-  // Section block with fields for sprint name and dates
   const startFormatted = dayjs(`${cur.startDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
   const endFormatted = dayjs(`${cur.endDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
-  
-  blocks.push({
-    type: 'section',
-    fields: [
-      {
-        type: 'mrkdwn',
-        text: `*Sprint:*\n${cur.sprintName}`
-      },
-      {
-        type: 'mrkdwn',
-        text: `*Start Date:*\n${startFormatted}`
-      },
-      {
-        type: 'mrkdwn',
-        text: `*End Date:*\n${endFormatted}`
-      }
-    ]
-  });
-  
-  // Context block for date range
-  blocks.push(buildContextBlock(`${startFormatted} to ${endFormatted}`));
-  
-  // Section blocks for user roles
+
   const roleOrder = ['account', 'producer', 'po', 'uiEng', 'beEng'];
-  const sortedUsers = cur.users.sort((a, b) => {
-    return roleOrder.indexOf(a.role) - roleOrder.indexOf(b.role);
-  });
-  
+  const sortedUsers = [...cur.users].sort((a, b) => roleOrder.indexOf(a.role) - roleOrder.indexOf(b.role));
+
+  const lines = [];
+  lines.push('*Current On-Call Rotation*');
+  lines.push(cur.sprintName);
+  lines.push(`Dates: ${startFormatted} to ${endFormatted}`);
+  lines.push('');
+
   sortedUsers.forEach(u => {
     const displayRole = ROLE_DISPLAY[u.role] || u.role;
-    blocks.push({
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: `*${displayRole}:* ${u.name} (<@${u.slackId}>)`
-      }
-    });
+    const suffix = highlightUserId && u.slackId === highlightUserId ? ' (you)' : '';
+    lines.push(`${displayRole}: ${u.name} (<@${u.slackId}>)${suffix}`);
   });
-  
-  return blocks;
+
+  return [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: lines.join('\n') }
+    }
+  ];
 }
+
+/**
+ * Build Block Kit blocks for the current rotation section.
+ * Uses header block, section blocks with fields for dates, context block for date range,
+ * and section blocks for user roles.
+ * @param {Object} cur - Current rotation data with sprintName, startDate, endDate, and users array
+ * @returns {Array<Object>} Array of Slack Block Kit blocks
+ */
+// NOTE: Duplicate buildCurrentRotationBlocks(cur) removed.
+// The enhanced version above (buildCurrentRotationBlocks(cur, highlightUserId)) is the single source of truth.
 
 /**
  * Format the Next On-Call Rotation section.
@@ -838,8 +1197,17 @@ function buildDisciplineBlocks(discObj) {
 
   const blocks = [];
   
-  // Header block for section title
-  blocks.push(buildHeaderBlock('Discipline Rotation Lists'));
+  // Use section block instead of header for modal compatibility (headers may not work in all modal contexts)
+  // Header block for section title - REMOVED: Headers may cause issues in modals opened from app home
+  // blocks.push(buildHeaderBlock('Discipline Rotation Lists'));
+  blocks.push({
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: '*Discipline Rotation Lists*'
+    }
+  });
+  blocks.push({ type: 'divider' });
   
   const roleOrder = ['account', 'producer', 'po', 'uiEng', 'beEng'];
   let hasAnyDisciplines = false;
@@ -854,12 +1222,13 @@ function buildDisciplineBlocks(discObj) {
     
     // Build user list text for this discipline
     const userList = discObj[role].map(u => `${u.name} (<@${u.slackId}>)`).join('\n');
+    const fullText = `*${displayRole}*\n${userList}`;
     
     blocks.push({
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `*${displayRole}*\n${userList}`
+        text: fullText
       }
     });
   });
@@ -872,7 +1241,6 @@ function buildDisciplineBlocks(discObj) {
       }
     ];
   }
-  
   return blocks;
 }
 
@@ -915,8 +1283,13 @@ function formatDisciplines(discObj) {
  * Builds a modal view that lists upcoming sprints with their on-call rotations
  * @returns {Promise<Object>} Modal view object
  */
-async function buildUpcomingSprintsModal() {
+async function buildUpcomingSprintsModal(options = {}) {
   try {
+    const DEFAULT_PAGE_SIZE = 10;
+    const pageSize = Number.isFinite(Number(options.pageSize))
+      ? Math.max(1, Number(options.pageSize))
+      : DEFAULT_PAGE_SIZE;
+
     // Load data asynchronously
     const currentState = await readCurrentState();
     const allSprints = await readSprints();
@@ -945,20 +1318,40 @@ async function buildUpcomingSprintsModal() {
       { type: "divider" }
     ];
 
+    // Build a quick lookup for Slack ID -> name (for nicer display)
+    const nameBySlackId = {};
+    if (disciplines && typeof disciplines === 'object') {
+      for (const users of Object.values(disciplines)) {
+        if (!Array.isArray(users)) continue;
+        for (const u of users) {
+          if (u?.slackId && u?.name && !nameBySlackId[u.slackId]) {
+            nameBySlackId[u.slackId] = u.name;
+          }
+        }
+      }
+    }
+
+    const totalUpcoming = upcomingSprints.length;
+    const sprintsToShow = upcomingSprints.slice(0, pageSize);
+
     // For each upcoming sprint, compute the actual sprint index in the full sprints array.
-    for (let i = 0; i < upcomingSprints.length; i++) {
-      const sprint = upcomingSprints[i];
+    for (let i = 0; i < sprintsToShow.length; i++) {
+      const sprint = sprintsToShow[i];
       const actualIndex = startingIndex + i;
       // Format dates properly by adding T00:00:00 to ensure they're interpreted as midnight PT
       const startFormatted = dayjs(`${sprint.startDate}T00:00:00-07:00`).format('ddd MM/DD/YYYY');
       const endFormatted = dayjs(`${sprint.endDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
       
       let rotationText = "";
+      const sprintUsers = await getSprintUsers(actualIndex);
       for (const role of ["account", "producer", "po", "uiEng", "beEng"]) {
-        const user = await getOnCallForSprint(actualIndex, role, disciplines);
+        const slackId = sprintUsers?.[role] || null;
         const displayRole = ROLE_DISPLAY[role] || role;
-        if (user) {
-          rotationText += `*${displayRole}*: ${user.name} (<@${user.slackId}>)\n`;
+        if (slackId) {
+          const name = nameBySlackId[slackId];
+          rotationText += name
+            ? `*${displayRole}*: ${name} (<@${slackId}>)\n`
+            : `*${displayRole}*: <@${slackId}>\n`;
         } else {
           rotationText += `*${displayRole}*: _Unassigned_\n`;
         }
@@ -974,12 +1367,52 @@ async function buildUpcomingSprintsModal() {
       blocks.push({ type: "divider" });
     }
 
+    // Remove trailing divider for cleaner UI
+    if (blocks.length > 0 && blocks[blocks.length - 1]?.type === 'divider') {
+      blocks.pop();
+    }
+
+    // Paging / Load more CTA
+    const shownCount = sprintsToShow.length;
+    blocks.push({ type: "divider" });
+    blocks.push({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: totalUpcoming > 0
+            ? `_Showing ${shownCount} of ${totalUpcoming} upcoming sprints_`
+            : `_No upcoming sprints found_`
+        }
+      ]
+    });
+
+    if (shownCount < totalUpcoming) {
+      const nextPageSize = Math.min(totalUpcoming, pageSize + DEFAULT_PAGE_SIZE);
+      blocks.push({
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            text: { type: "plain_text", text: "Load more" },
+            action_id: "load_more_upcoming_sprints",
+            value: JSON.stringify({ pageSize: nextPageSize })
+          }
+        ]
+      });
+    }
+
+    // Slack modal limit is 100 blocks; keep ourselves well below it.
+    if (blocks.length > 100) {
+      blocks.splice(100);
+    }
+
     return {
       type: "modal",
       callback_id: "upcoming_sprints_modal",
       title: { type: "plain_text", text: "Upcoming Sprints" },
-      submit: { type: "plain_text", text: "Close" },
-      close: { type: "plain_text", text: "Cancel" },
+      close: { type: "plain_text", text: "Close" },
+      private_metadata: JSON.stringify({ pageSize }),
       blocks
     };
   } catch (error) {
@@ -1003,17 +1436,79 @@ async function buildUpcomingSprintsModal() {
   }
 }
 
-// Create a custom ExpressReceiver with endpoint /slack/events
-const receiver = new ExpressReceiver({
-  signingSecret: process.env.SLACK_SIGNING_SECRET,
-  endpoints: '/slack/events'
-});
+// Determine receiver mode based on environment.
+// - Socket Mode is for local/dev when SLACK_APP_TOKEN is set (and SOCKET_MODE is not 'false')
+// - HTTP Mode is for production (or when SOCKET_MODE=false / no SLACK_APP_TOKEN)
+const isDev = process.env.NODE_ENV !== 'production';
+const socketModeRequested = process.env.SOCKET_MODE !== 'false';
+const hasAppToken = !!process.env.SLACK_APP_TOKEN;
+const useSocketMode = isDev && socketModeRequested && hasAppToken;
 
-// Create the Bolt app using the custom receiver
-const slackApp = new App({
-  token: process.env.SLACK_BOT_TOKEN,
-  receiver
-});
+let receiver = null;
+let receiverMode = useSocketMode ? 'socket' : 'http';
+
+if (useSocketMode) {
+  console.log('[appHome] Using Socket Mode (SLACK_APP_TOKEN present)');
+} else {
+  receiver = new ExpressReceiver({
+    signingSecret: process.env.SLACK_SIGNING_SECRET,
+    endpoints: '/slack/events'
+  });
+  console.log('[appHome] Using HTTP mode (ExpressReceiver)');
+}
+
+let slackApp;
+const disableSlack =
+  process.env.DISABLE_SLACK === 'true' ||
+  process.env.NODE_ENV === 'test';
+
+if (!process.env.SLACK_BOT_TOKEN) {
+  if (disableSlack) {
+    console.warn('[appHome] SLACK_BOT_TOKEN missing; Slack app disabled (noop) for test/disabled mode');
+    slackApp = createNoopSlackApp();
+    receiver = null;
+    receiverMode = 'disabled';
+  } else {
+    throw new Error('[appHome] SLACK_BOT_TOKEN is required to initialize Slack Bolt App (set DISABLE_SLACK=true to run without Slack in tests).');
+  }
+} else {
+  slackApp = useSocketMode
+    ? new App({
+        token: process.env.SLACK_BOT_TOKEN,
+        socketMode: true,
+        appToken: process.env.SLACK_APP_TOKEN
+      })
+    : new App({
+        token: process.env.SLACK_BOT_TOKEN,
+        receiver
+      });
+}
+
+/**
+ * Open a minimal probe modal first, then update to the real modal.
+ * This isolates trigger/context failures (probe fails) from payload failures (update fails).
+ */
+async function openWithProbe({ client, triggerId, interactivityPointer, probeView, realView, logger, label }) {
+  const probeBytes = Buffer.byteLength(JSON.stringify(probeView || {}), 'utf8');
+  const realBytes = Buffer.byteLength(JSON.stringify(realView || {}), 'utf8');
+  const realBlocksCount = Array.isArray(realView?.blocks) ? realView.blocks.length : -1;
+
+  const openArgs = interactivityPointer
+    ? { interactivity_pointer: interactivityPointer, view: probeView }
+    : { trigger_id: triggerId, view: probeView };
+
+  const openResult = await client.views.open(openArgs);
+
+  await client.views.update({
+    view_id: openResult.view.id,
+    hash: openResult.view.hash,
+    view: realView
+  });
+
+  if (typeof logger?.info === 'function') {
+    logger.info('[appHome] Probe->update succeeded', { label, viewId: openResult?.view?.id });
+  }
+}
 
 /**
  * Action handler: Open Upcoming Sprints Modal.
@@ -1021,15 +1516,677 @@ const slackApp = new App({
 slackApp.action('open_upcoming_sprints', async ({ ack, body, client, logger }) => {
   await ack();
   try {
+    // Get trigger_id - check multiple possible locations
+    const triggerId = body.trigger_id;
+
+    const minimalView = {
+      type: "modal",
+      callback_id: "override_minimal_probe",
+      title: { type: "plain_text", text: "Request Coverage" },
+      close: { type: "plain_text", text: "Close" },
+      blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "Opening coverage request..." }
+        }
+      ]
+    };
+    
+    if (!triggerId) {
+      logger.error("No trigger_id found in open_upcoming_sprints action - cannot open modal");
+      // Try to send DM as fallback
+      const userId = body.user?.id;
+      if (userId) {
+        try {
+          await client.chat.postMessage({
+            channel: userId,
+            text: "Unable to open upcoming sprints modal. Please try again later or contact your administrator."
+          });
+        } catch (dmError) {
+          logger.error("Error sending fallback DM:", dmError);
+        }
+      }
+      return;
+    }
+
+    const { buildMinimalDebugModal } = require('./overrideModal');
+    const probeView = buildMinimalDebugModal({
+      title: 'Upcoming Sprints',
+      bodyText: 'Opening upcoming sprints…',
+      callbackId: 'debug_probe_upcoming_sprints'
+    });
+
+    // IMPORTANT: consume trigger_id ASAP (it expires quickly). We open the probe first,
+    // then build the heavier view and update the modal.
+    const openResult = await client.views.open({ trigger_id: triggerId, view: probeView });
+
     const modalView = await buildUpcomingSprintsModal();
-    await client.views.open({
-      trigger_id: body.trigger_id,
+
+    await client.views.update({
+      view_id: openResult.view.id,
+      hash: openResult.view.hash,
+      view: modalView
+    });
+
+    if (typeof logger?.info === 'function') {
+      logger.info('[appHome] Opened upcoming sprints modal via probe->update', {
+        viewId: openResult?.view?.id
+      });
+    }
+  } catch (error) {
+    logger.error("Error opening upcoming sprints modal:", error, {
+      errorMessage: error.message,
+      errorStack: error.stack,
+      hasTriggerId: !!body?.trigger_id
+    });
+    // Try to send fallback message
+    try {
+      const userId = body.user?.id;
+      if (userId) {
+        await client.chat.postMessage({
+          channel: userId,
+          text: "Unable to open upcoming sprints modal. Please try again later."
+        });
+      }
+    } catch (fallbackError) {
+      logger.error("Error sending fallback message:", fallbackError);
+    }
+  }
+});
+
+/**
+ * Action handler: Load more upcoming sprints (updates the existing modal; no trigger_id needed).
+ */
+slackApp.action('load_more_upcoming_sprints', async ({ ack, body, client, logger }) => {
+  await ack();
+  try {
+    const nextFromValue = (() => {
+      const raw = body?.actions?.[0]?.value;
+      if (!raw) return null;
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return null;
+      }
+    })();
+
+    const meta = (() => {
+      const raw = body?.view?.private_metadata;
+      if (!raw) return {};
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return {};
+      }
+    })();
+
+    const nextPageSize =
+      Number.isFinite(Number(nextFromValue?.pageSize))
+        ? Number(nextFromValue.pageSize)
+        : (Number.isFinite(Number(meta?.pageSize)) ? Number(meta.pageSize) + 10 : 20);
+
+    const updatedView = await buildUpcomingSprintsModal({ pageSize: nextPageSize });
+
+    await client.views.update({
+      view_id: body.view.id,
+      hash: body.view.hash,
+      view: updatedView
+    });
+  } catch (error) {
+    logger?.error?.('[appHome] Error loading more upcoming sprints', error);
+  }
+});
+
+/**
+ * Action handler: Request Coverage from Home
+ */
+slackApp.action('request_coverage_from_home', async ({ ack, body, client, logger }) => {
+  await ack();
+  try {
+    const interactivityPointer =
+      body?.interactivity?.interactivity_pointer ||
+      body?.interactivity_pointer ||
+      null;
+
+    // Get user ID - handle both app home and modal contexts
+    let userId = body.user?.id;
+    let sprintIndex = null;
+    
+    // Try to parse action value if it exists
+    if (body.actions && body.actions[0] && body.actions[0].value) {
+      try {
+        const actionValue = JSON.parse(body.actions[0].value);
+        userId = actionValue.userId || userId;
+        const rawSprintIndex = actionValue.sprintIndex;
+        if (rawSprintIndex !== undefined && rawSprintIndex !== null && rawSprintIndex !== '') {
+          const parsedSprintIndex = Number.parseInt(String(rawSprintIndex), 10);
+          sprintIndex = Number.isFinite(parsedSprintIndex) ? parsedSprintIndex : null;
+        } else {
+          sprintIndex = null;
+        }
+      } catch (parseError) {
+        logger.warn("Could not parse action value:", parseError);
+      }
+    }
+    
+    if (!userId) {
+      logger.error("No user ID found in request coverage action");
+      return;
+    }
+    
+    // Check if trigger_id exists (required for opening modals)
+    if (!body.trigger_id && !interactivityPointer) {
+      logger.error("No trigger_id found in request coverage action - cannot open modal");
+      // Send ephemeral message instead
+      await client.chat.postEphemeral({
+        channel: body.user.id,
+        user: userId,
+        text: `Please use ${getEnvironmentCommand('triage-override')} command to request coverage.`
+      });
+      return;
+    }
+    
+    // Import override modal builder
+    const { buildOverrideRequestModal, buildOverrideRequestModalForSprint, buildMinimalDebugModal } = require('./overrideModal');
+    const modalView =
+      Number.isFinite(sprintIndex)
+        ? buildOverrideRequestModalForSprint(userId, sprintIndex)
+        : buildOverrideRequestModal(userId);
+    
+    const triggerId = body.trigger_id;
+    const minimalView = buildMinimalDebugModal({
+      title: 'Request Coverage',
+      bodyText: 'Opening coverage request…',
+      callbackId: 'override_minimal_probe'
+    });
+
+    const tryOpen = async (viewToOpen, attemptLabel) => {
+      const args = interactivityPointer
+        ? { interactivity_pointer: interactivityPointer, view: viewToOpen }
+        : { trigger_id: triggerId, view: viewToOpen };
+      return await client.views.open(args);
+    };
+
+    // Open a minimal probe modal first, then update to the real view.
+    // This helps distinguish trigger-id issues from view-shape issues and can improve reliability.
+    let openResult;
+    try {
+      openResult = await tryOpen(minimalView, 'probe_first');
+    } catch (openErr) {
+      throw openErr;
+    }
+
+    try {
+      await client.views.update({
+        view_id: openResult.view.id,
+        hash: openResult.view.hash,
+        view: modalView
+      });
+    } catch (updateErr) {
+      throw updateErr;
+    }
+
+    // Probe auth context after we’ve consumed the trigger_id (lower risk of trigger expiry).
+    // If this fails, it should not block the user flow.
+    try {
+      await client.auth.test();
+    } catch {}
+  } catch (error) {
+    logger.error("Error opening coverage request modal from home:", error);
+    // Try to send ephemeral message as fallback
+    try {
+      if (body.user?.id) {
+        await client.chat.postEphemeral({
+          channel: body.user.id,
+          user: body.user.id,
+          text: `Unable to open coverage request. Please try ${getEnvironmentCommand('triage-override')} command instead.`
+        });
+      }
+    } catch (fallbackError) {
+      logger.error("Error sending fallback message:", fallbackError);
+    }
+  }
+});
+
+/**
+ * Action handler: View My Schedule
+ */
+slackApp.action('view_my_schedule', async ({ ack, body, client, logger }) => {
+  await ack();
+  try {
+    // Get user ID - handle both app home and modal contexts
+    let userId = body.user?.id;
+    
+    // Try to parse action value if it exists
+    if (body.actions && body.actions[0] && body.actions[0].value) {
+      try {
+        const actionValue = JSON.parse(body.actions[0].value);
+        userId = actionValue.userId || userId;
+      } catch (parseError) {
+        logger.warn("Could not parse action value:", parseError);
+      }
+    }
+    
+    if (!userId) {
+      logger.error("No user ID found in view my schedule action");
+      return;
+    }
+    
+    // Check if trigger_id exists (required for opening modals)
+    if (!body.trigger_id) {
+      logger.error("No trigger_id found in view my schedule action - cannot open modal");
+      // Send ephemeral message instead
+      await client.chat.postEphemeral({
+        channel: body.user.id,
+        user: userId,
+        text: `Please use ${getEnvironmentCommand('triage-override')} command to view your schedule.`
+      });
+      return;
+    }
+    
+    const { buildMinimalDebugModal } = require('./overrideModal');
+    const probeView = buildMinimalDebugModal({
+      title: 'My Schedule',
+      bodyText: 'Opening schedule…',
+      callbackId: 'debug_probe_my_schedule'
+    });
+
+    // Consume trigger_id ASAP, then build the heavier view and update.
+    const openResult = await client.views.open({ trigger_id: body.trigger_id, view: probeView });
+
+    const DEFAULT_PAGE_SIZE = 10;
+    const sprints = await readSprints();
+    const disciplines = await readDisciplines();
+    const shiftsPlusOne = await getUserUpcomingShifts(userId, sprints, disciplines, { limit: DEFAULT_PAGE_SIZE + 1 });
+
+    const hasMore = shiftsPlusOne.length > DEFAULT_PAGE_SIZE;
+    const shiftsToShow = shiftsPlusOne.slice(0, DEFAULT_PAGE_SIZE);
+
+    const blocks = [
+      { type: 'header', text: { type: 'plain_text', text: 'Your Schedule' } },
+      { type: 'divider' }
+    ];
+
+    if (shiftsToShow.length === 0) {
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: '_No upcoming shifts scheduled._' }
+      });
+    } else {
+      shiftsToShow.forEach((shift) => {
+        const startFormatted = dayjs(`${shift.startDate}T00:00:00-07:00`).format("ddd, MMM D, YYYY");
+        const endFormatted = dayjs(`${shift.endDate}T00:00:00-07:00`).format("ddd, MMM D, YYYY");
+
+        const teamText = shift.rotationText
+          ? `\n\n*Team on rotation*\n${shift.rotationText}`
+          : '';
+
+        blocks.push({
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*${shift.sprintName}*\n*Your role:* ${shift.roleDisplay}\n${startFormatted} - ${endFormatted}\n${shift.daysUntil}${teamText}`
+          },
+          accessory: {
+            type: 'button',
+            text: { type: 'plain_text', text: 'Request Coverage' },
+            action_id: 'request_coverage_from_home',
+            value: JSON.stringify({ userId, sprintIndex: shift.sprintIndex })
+          }
+        });
+        blocks.push({ type: 'divider' });
+      });
+
+      // Remove last divider
+      if (blocks[blocks.length - 1].type === 'divider') {
+        blocks.pop();
+      }
+
+      blocks.push({ type: 'divider' });
+      blocks.push({
+        type: 'context',
+        elements: [{
+          type: 'mrkdwn',
+          text: hasMore
+            ? `_Showing ${shiftsToShow.length}+ shifts_`
+            : `_Showing ${shiftsToShow.length} shift${shiftsToShow.length === 1 ? '' : 's'}_`
+        }]
+      });
+
+      if (hasMore) {
+        blocks.push({
+          type: 'actions',
+          elements: [{
+            type: 'button',
+            text: { type: 'plain_text', text: 'Load more' },
+            action_id: 'load_more_my_schedule',
+            value: JSON.stringify({ userId, pageSize: DEFAULT_PAGE_SIZE + 10 })
+          }]
+        });
+      }
+    }
+
+    // Validate block count (Slack modal limit is 100 blocks)
+    if (blocks.length > 100) {
+      logger.warn(`Modal block count (${blocks.length}) exceeds Slack limit of 100 blocks`);
+      blocks.splice(100);
+    }
+
+    const modalView = {
+      type: 'modal',
+      callback_id: 'my_schedule_modal',
+      title: { type: 'plain_text', text: 'My Schedule' },
+      close: { type: 'plain_text', text: 'Close' },
+      private_metadata: JSON.stringify({ userId, pageSize: DEFAULT_PAGE_SIZE }),
+      blocks
+    };
+
+    await client.views.update({
+      view_id: openResult.view.id,
+      hash: openResult.view.hash,
       view: modalView
     });
   } catch (error) {
-    logger.error("Error opening upcoming sprints modal:", error);
+    logger.error("Error opening my schedule modal:", error);
+    // Try to send ephemeral message as fallback
+    try {
+      if (body.user?.id) {
+        await client.chat.postEphemeral({
+          channel: body.user.id,
+          user: body.user.id,
+          text: "Unable to open schedule view. Please try again later."
+        });
+      }
+    } catch (fallbackError) {
+      logger.error("Error sending fallback message:", fallbackError);
+    }
   }
 });
+
+/**
+ * Action handler: Load more entries in the My Schedule modal (views.update; no trigger_id needed).
+ */
+slackApp.action('load_more_my_schedule', async ({ ack, body, client, logger }) => {
+  await ack();
+  try {
+    const fromValue = (() => {
+      const raw = body?.actions?.[0]?.value;
+      if (!raw) return null;
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return null;
+      }
+    })();
+
+    const meta = (() => {
+      const raw = body?.view?.private_metadata;
+      if (!raw) return {};
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return {};
+      }
+    })();
+
+    const userId = fromValue?.userId || meta?.userId || body?.user?.id || null;
+    if (!userId) return;
+
+    const nextPageSizeRaw = Number(fromValue?.pageSize);
+    const nextPageSize = Number.isFinite(nextPageSizeRaw) ? Math.max(1, nextPageSizeRaw) : 20;
+
+    const sprints = await readSprints();
+    const disciplines = await readDisciplines();
+    const shiftsPlusOne = await getUserUpcomingShifts(userId, sprints, disciplines, { limit: nextPageSize + 1 });
+
+    const hasMore = shiftsPlusOne.length > nextPageSize;
+    const shiftsToShow = shiftsPlusOne.slice(0, nextPageSize);
+
+    const blocks = [
+      { type: 'header', text: { type: 'plain_text', text: 'Your Schedule' } },
+      { type: 'divider' }
+    ];
+
+    if (shiftsToShow.length === 0) {
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: '_No upcoming shifts scheduled._' }
+      });
+    } else {
+      shiftsToShow.forEach((shift) => {
+        const startFormatted = dayjs(`${shift.startDate}T00:00:00-07:00`).format("ddd, MMM D, YYYY");
+        const endFormatted = dayjs(`${shift.endDate}T00:00:00-07:00`).format("ddd, MMM D, YYYY");
+
+        const teamText = shift.rotationText
+          ? `\n\n*Team on rotation*\n${shift.rotationText}`
+          : '';
+
+        blocks.push({
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*${shift.sprintName}*\n*Your role:* ${shift.roleDisplay}\n${startFormatted} - ${endFormatted}\n${shift.daysUntil}${teamText}`
+          },
+          accessory: {
+            type: 'button',
+            text: { type: 'plain_text', text: 'Request Coverage' },
+            action_id: 'request_coverage_from_home',
+            value: JSON.stringify({ userId, sprintIndex: shift.sprintIndex })
+          }
+        });
+        blocks.push({ type: 'divider' });
+      });
+
+      // Remove last divider
+      if (blocks[blocks.length - 1].type === 'divider') {
+        blocks.pop();
+      }
+
+      blocks.push({ type: 'divider' });
+      blocks.push({
+        type: 'context',
+        elements: [{
+          type: 'mrkdwn',
+          text: hasMore
+            ? `_Showing ${shiftsToShow.length}+ shifts_`
+            : `_Showing ${shiftsToShow.length} shift${shiftsToShow.length === 1 ? '' : 's'}_`
+        }]
+      });
+
+      if (hasMore) {
+        blocks.push({
+          type: 'actions',
+          elements: [{
+            type: 'button',
+            text: { type: 'plain_text', text: 'Load more' },
+            action_id: 'load_more_my_schedule',
+            value: JSON.stringify({ userId, pageSize: nextPageSize + 10 })
+          }]
+        });
+      }
+    }
+
+    if (blocks.length > 100) {
+      logger?.warn?.(`Modal block count (${blocks.length}) exceeds Slack limit of 100 blocks`);
+      blocks.splice(100);
+    }
+
+    const updatedView = {
+      type: 'modal',
+      callback_id: 'my_schedule_modal',
+      title: { type: 'plain_text', text: 'My Schedule' },
+      close: { type: 'plain_text', text: 'Close' },
+      private_metadata: JSON.stringify({ userId, pageSize: nextPageSize }),
+      blocks
+    };
+
+    await client.views.update({
+      view_id: body.view.id,
+      hash: body.view.hash,
+      view: updatedView
+    });
+  } catch (error) {
+    logger?.error?.('[appHome] Error loading more schedule entries', error);
+  }
+});
+
+/**
+ * Action handler: View Discipline Lists
+ */
+slackApp.action('view_discipline_lists', async ({ ack, body, client, logger }) => {
+  await ack();
+  try {
+    // Get user ID
+    const userId = body.user?.id;
+    if (!userId) {
+      logger.error("No user ID found in view discipline lists action");
+      return;
+    }
+    
+    // Get trigger_id - check multiple possible locations
+    let triggerId = body.trigger_id;
+    if (!triggerId && body.container) {
+      // For app home actions, trigger_id might be in a different location
+      // Try to get it from the view if available
+      logger.warn("No trigger_id found in body, checking container:", body.container);
+    }
+    
+    if (!triggerId) {
+      logger.error("No trigger_id found in view discipline lists action - cannot open modal");
+      // Send DM instead since we can't open modal without trigger_id
+      try {
+        await client.chat.postMessage({
+          channel: userId,
+          text: "Here are the rotation lists:\n\n" + await formatDisciplinesAsText()
+        });
+      } catch (dmError) {
+        logger.error("Error sending DM with discipline lists:", dmError);
+      }
+      return;
+    }
+    
+    const disciplines = await readDisciplines();
+    const disciplineBlocks = buildDisciplineBlocks(disciplines);
+    
+    // Validate block count (Slack modal limit is 100 blocks)
+    // Also ensure blocks are valid
+    if (disciplineBlocks.length > 100) {
+      logger.warn(`Discipline blocks count (${disciplineBlocks.length}) exceeds Slack limit of 100 blocks, truncating`);
+      // Keep header and truncate the rest
+      const headerIndex = disciplineBlocks.findIndex(b => b.type === 'header');
+      if (headerIndex >= 0) {
+        const truncatedBlocks = [
+          disciplineBlocks[headerIndex],
+          { type: 'divider' },
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `_Too many disciplines to display (${disciplineBlocks.length} blocks). Showing first 5 disciplines only._`
+            }
+          },
+          { type: 'divider' }
+        ];
+        // Add first few discipline blocks (max 95 to stay under limit)
+        const maxBlocksToAdd = 95;
+        let blocksAdded = 0;
+        for (let i = headerIndex + 1; i < disciplineBlocks.length && blocksAdded < maxBlocksToAdd; i++) {
+          truncatedBlocks.push(disciplineBlocks[i]);
+          blocksAdded++;
+        }
+        disciplineBlocks.splice(0, disciplineBlocks.length, ...truncatedBlocks);
+      } else {
+        disciplineBlocks.splice(100);
+      }
+    }
+    
+    // Validate all blocks have required fields
+    const validBlocks = disciplineBlocks.filter(block => {
+      if (!block.type) return false;
+      if (block.type === 'section' && !block.text && !block.fields) return false;
+      if (block.type === 'header' && !block.text) return false;
+      return true;
+    });
+    
+    const modalView = {
+      type: 'modal',
+      callback_id: 'discipline_lists_modal',
+      title: { type: 'plain_text', text: 'Rotation Lists' },
+      close: { type: 'plain_text', text: 'Close' },
+      blocks: validBlocks
+    };
+
+    const { buildMinimalDebugModal } = require('./overrideModal');
+    const probeView = buildMinimalDebugModal({
+      title: 'Rotation Lists',
+      bodyText: 'Opening rotation lists…',
+      callbackId: 'debug_probe_discipline_lists'
+    });
+
+    await openWithProbe({
+      client,
+      triggerId,
+      interactivityPointer: null,
+      probeView,
+      realView: modalView,
+      logger,
+      label: 'view_discipline_lists'
+    });
+  } catch (error) {
+    logger.error("Error opening discipline lists modal:", error, {
+      errorMessage: error.message,
+      errorStack: error.stack,
+      bodyKeys: body ? Object.keys(body) : null,
+      hasTriggerId: !!body?.trigger_id
+    });
+    // Try to send ephemeral message or DM as fallback
+    try {
+      const userId = body.user?.id;
+      if (userId) {
+        // Try DM since ephemeral requires channel
+        await client.chat.postMessage({
+          channel: userId,
+          text: `Unable to open rotation lists modal. Please try ${getEnvironmentCommand('triage-override')} command or contact your administrator.`
+        });
+      }
+    } catch (fallbackError) {
+      logger.error("Error sending fallback message:", fallbackError);
+    }
+  }
+});
+
+/**
+ * Helper function to format disciplines as plain text for fallback
+ */
+async function formatDisciplinesAsText() {
+  try {
+    const disciplines = await readDisciplines();
+    if (!disciplines || Object.keys(disciplines).length === 0) {
+      return "No discipline data available.";
+    }
+    
+    let text = "";
+    const roleOrder = ['account', 'producer', 'po', 'uiEng', 'beEng'];
+    
+    roleOrder.forEach(role => {
+      if (!disciplines[role] || !Array.isArray(disciplines[role]) || disciplines[role].length === 0) {
+        return;
+      }
+      
+      const displayRole = ROLE_DISPLAY[role] || role;
+      text += `*${displayRole}:*\n`;
+      disciplines[role].forEach(u => {
+        text += `  • ${u.name} (<@${u.slackId}>)\n`;
+      });
+      text += "\n";
+    });
+    
+    return text || "No disciplines configured.";
+  } catch (error) {
+    console.error("Error formatting disciplines as text:", error);
+    return "Error loading discipline data.";
+  }
+}
 
 /**
  * Listen for the app_home_opened event and publish the App Home view.
@@ -1114,9 +2271,28 @@ slackApp.event('app_home_opened', async ({ event, client, logger }) => {
       });
     }
     
+    // Get user-specific information for personalization
+    const userId = event.user;
+    let onCallStatus = null;
+    let upcomingShifts = [];
+    
+    if (userId) {
+      // Calculate user's on-call status
+      onCallStatus = getUserOnCallStatus(userId, current);
+      
+      // Get user's upcoming shifts
+      try {
+        const sprints = await readSprints();
+        // Home tab: lightweight preview
+        upcomingShifts = await getUserUpcomingShifts(userId, sprints, disciplines, { limit: 3 });
+      } catch (error) {
+        logger.error('[app_home_opened] Error loading user upcoming shifts:', error);
+      }
+    }
+    
     // Build and publish home view with available data
     // buildHomeView handles null values gracefully
-    const homeView = buildHomeView(current, next, disciplines);
+    const homeView = await buildHomeView(current, next, disciplines, userId, onCallStatus, upcomingShifts);
     await client.views.publish({
       user_id: event.user,
       view: homeView
@@ -1146,11 +2322,12 @@ slackApp.event('app_home_opened', async ({ event, client, logger }) => {
   }
 });
 
-// Export the Slack Bolt app and its receiver for integration with server.js
+// Export the Slack Bolt app, its receiver, and receiver mode for integration with server.js
 // Also export view building functions for testing
 module.exports = { 
   slackApp, 
   receiver,
+  receiverMode,
   buildHomeView,
   buildFallbackView,
   getCurrentOnCall,

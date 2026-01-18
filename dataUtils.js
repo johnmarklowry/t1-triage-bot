@@ -33,6 +33,32 @@ const OVERRIDES_FILE = path.join(__dirname, "overrides.json");
 // Configuration for dual-write mode (can be disabled after validation)
 const DUAL_WRITE_MODE = process.env.DUAL_WRITE_MODE !== 'false';
 const USE_DATABASE = process.env.USE_DATABASE !== 'false';
+const HAS_DATABASE_URL = !!process.env.DATABASE_URL;
+// Overrides are used to compute on-call assignments; prefer DB when available.
+// To force JSON overrides (not recommended), set OVERRIDES_SOURCE=json.
+// If DB read fails and you want a temporary fallback to JSON, set OVERRIDES_JSON_FALLBACK=true.
+const OVERRIDES_SOURCE = (process.env.OVERRIDES_SOURCE || '').toLowerCase();
+
+// Redis cache (optional)
+const cache = require('./cache/redisClient');
+const CACHE_TTLS = {
+  sprintsAll: 60 * 60 * 6, // 6h
+  disciplinesAll: 60 * 15, // 15m
+  currentState: 10, // 10s
+  overridesAll: 10, // 10s
+  sprintUsers: 60 // 60s
+};
+
+async function cacheGetOrSetJson(key, ttlSeconds, fetchFn) {
+  const cached = await cache.getJson(key);
+  if (cached !== null && cached !== undefined) return cached;
+  const value = await fetchFn();
+  // Avoid caching null/undefined placeholders; cache empty arrays/objects are ok.
+  if (value !== null && value !== undefined) {
+    await cache.setJson(key, value, ttlSeconds);
+  }
+  return value;
+}
 
 /**
  * Format a date consistently using Pacific Time
@@ -117,25 +143,27 @@ async function readSprints() {
   }
 
   try {
-    const sprints = await SprintsRepository.getAll();
-    return sprints.map(sprint => {
-      // Convert Date objects to YYYY-MM-DD strings for consistency
-      const formatDate = (date) => {
-        if (!date) return null;
-        if (date instanceof Date) {
-          return date.toISOString().split('T')[0];
-        }
-        if (typeof date === 'string') {
-          return date.split('T')[0]; // Handle ISO strings
-        }
-        return String(date);
-      };
-      
-      return {
-        sprintName: sprint.sprintName,
-        startDate: formatDate(sprint.startDate),
-        endDate: formatDate(sprint.endDate)
-      };
+    return await cacheGetOrSetJson('sprints:all', CACHE_TTLS.sprintsAll, async () => {
+      const sprints = await SprintsRepository.getAll();
+      return sprints.map(sprint => {
+        // Convert Date objects to YYYY-MM-DD strings for consistency
+        const formatDate = (date) => {
+          if (!date) return null;
+          if (date instanceof Date) {
+            return date.toISOString().split('T')[0];
+          }
+          if (typeof date === 'string') {
+            return date.split('T')[0]; // Handle ISO strings
+          }
+          return String(date);
+        };
+        
+        return {
+          sprintName: sprint.sprintName,
+          startDate: formatDate(sprint.startDate),
+          endDate: formatDate(sprint.endDate)
+        };
+      });
     });
   } catch (error) {
     console.error('[readSprints] Database error:', error);
@@ -184,7 +212,9 @@ async function readDisciplines() {
   }
 
   try {
-    const disciplines = await UsersRepository.getDisciplines();
+    const disciplines = await cacheGetOrSetJson('disciplines:all', CACHE_TTLS.disciplinesAll, async () => {
+      return await UsersRepository.getDisciplines();
+    });
     
     // Validate that no user appears in multiple disciplines
     const allUsers = new Map();
@@ -239,7 +269,9 @@ async function readCurrentState() {
   }
 
   try {
-    const state = await CurrentStateRepository.get();
+    const state = await cacheGetOrSetJson('currentState', CACHE_TTLS.currentState, async () => {
+      return await CurrentStateRepository.get();
+    });
     return state;
   } catch (error) {
     console.error('[readCurrentState] Database error:', error);
@@ -280,6 +312,9 @@ async function saveCurrentState(state) {
   if (USE_DATABASE) {
     try {
       await CurrentStateRepository.update(state, 'dataUtils');
+      // Invalidate cache for current state (and computed sprint users if enabled)
+      await cache.del('currentState');
+      await cache.del(`sprintUsers:${state.sprintIndex}`);
       
       // Dual-write to JSON if enabled
       if (DUAL_WRITE_MODE) {
@@ -301,28 +336,34 @@ async function saveCurrentState(state) {
  * Read overrides from database
  */
 async function readOverrides() {
-  if (!USE_DATABASE) {
+  if (OVERRIDES_SOURCE === 'json' || !HAS_DATABASE_URL) {
     return loadJSON(OVERRIDES_FILE) || [];
   }
 
   try {
-    const overrides = await OverridesRepository.getAll();
-    return overrides.map(override => ({
-      sprintIndex: override.sprintIndex,
-      role: override.role,
-      originalSlackId: override.originalSlackId,
-      newSlackId: override.newSlackId,
-      newName: override.newName,
-      requestedBy: override.requestedBy,
-      approved: override.approved,
-      approvedBy: override.approvedBy,
-      approvalTimestamp: override.approvalTimestamp,
-      timestamp: override.timestamp
-    }));
+    return await cacheGetOrSetJson('overrides:all', CACHE_TTLS.overridesAll, async () => {
+      const overrides = await OverridesRepository.getAll();
+      return overrides.map(override => ({
+        sprintIndex: override.sprintIndex,
+        role: override.role,
+        originalSlackId: override.originalSlackId,
+        newSlackId: override.newSlackId,
+        newName: override.newName,
+        requestedBy: override.requestedBy,
+        approved: override.approved,
+        approvedBy: override.approvedBy,
+        approvalTimestamp: override.approvalTimestamp,
+        timestamp: override.timestamp
+      }));
+    });
   } catch (error) {
     console.error('[readOverrides] Database error:', error);
-    // Fallback to JSON if database fails
-    return loadJSON(OVERRIDES_FILE) || [];
+    // Default: do NOT consult JSON when DB is configured, to avoid using stale data.
+    // Optional escape hatch: OVERRIDES_JSON_FALLBACK=true
+    if (process.env.OVERRIDES_JSON_FALLBACK === 'true') {
+      return loadJSON(OVERRIDES_FILE) || [];
+    }
+    return [];
   }
 }
 
@@ -474,6 +515,14 @@ async function getUserForSprintAndRole(sprintIndex, role, disciplines, overrides
  * This is the single source of truth for who should be on call
  */
 async function getSprintUsers(sprintIndex) {
+  const idx = Number.parseInt(String(sprintIndex), 10);
+  const cacheKey = Number.isFinite(idx) ? `sprintUsers:${idx}` : null;
+
+  if (cacheKey) {
+    const cached = await cache.getJson(cacheKey);
+    if (cached) return cached;
+  }
+
   const disciplines = await readDisciplines();
   const overrides = await readOverrides();
   
@@ -502,6 +551,10 @@ async function getSprintUsers(sprintIndex) {
     console.error('[getSprintUsers] Duplicates:', duplicates);
   }
   
+  if (cacheKey) {
+    await cache.setJson(cacheKey, users, CACHE_TTLS.sprintUsers);
+  }
+
   return users;
 }
 

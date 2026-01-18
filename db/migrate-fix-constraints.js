@@ -32,9 +32,9 @@ async function runConstraintFixes() {
         try {
           console.log(`Executing statement ${i + 1}/${statements.length}...`);
           await query(statement);
-          console.log(`✅ Statement ${i + 1} executed successfully`);
+          console.log(`Statement ${i + 1} executed successfully`);
         } catch (error) {
-          console.error(`❌ Error executing statement ${i + 1}:`, error.message);
+          console.error(`Error executing statement ${i + 1}:`, error.message);
           // Continue with other statements unless it's a critical error
           // Check for PostgreSQL undefined_object error code or specific error message patterns
           if (
@@ -42,7 +42,7 @@ async function runConstraintFixes() {
             /constraint ".*" of relation ".*" does not exist/.test(error.message) ||
             /index ".*" does not exist/.test(error.message)
           ) {
-            console.log('⚠️  Skipping statement (constraint/index does not exist)');
+            console.log('Skipping statement (constraint/index does not exist)');
           } else {
             throw error;
           }
@@ -50,13 +50,13 @@ async function runConstraintFixes() {
       }
     }
     
-    console.log('✅ Database constraint fixes migration completed successfully');
+    console.log('Database constraint fixes migration completed successfully');
     
     // Verify the fixes
     await verifyConstraintFixes();
     
   } catch (error) {
-    console.error('❌ Migration failed:', error);
+    console.error('Migration failed:', error);
     throw error;
   }
 }
@@ -104,10 +104,10 @@ async function verifyConstraintFixes() {
     
     console.log('Current state table constraints:', currentStateConstraints.rows.map(r => r.constraint_name));
     
-    console.log('✅ Constraint verification completed');
+    console.log('Constraint verification completed');
     
   } catch (error) {
-    console.error('❌ Constraint verification failed:', error);
+    console.error('Constraint verification failed:', error);
     throw error;
   }
 }
@@ -139,7 +139,7 @@ async function testConstraintFixes() {
       ON CONFLICT (slack_id, discipline) DO NOTHING
     `, [testUserId, testUserName, 'beEng']);
     
-    console.log('✅ Users table test passed - same user can be in multiple disciplines');
+    console.log('Users table test passed - same user can be in multiple disciplines');
     
     // Clean up test data
     await query('DELETE FROM users WHERE slack_id = $1', [testUserId]);
@@ -163,15 +163,15 @@ async function testConstraintFixes() {
       ON CONFLICT (sprint_index) DO NOTHING
     `, ['Test Sprint 2', '2024-01-15', '2024-01-28', testSprintIndex]);
     
-    console.log('✅ Sprints table test passed - duplicate sprint index handled gracefully');
+    console.log('Sprints table test passed - duplicate sprint index handled gracefully');
     
     // Clean up test data
     await query('DELETE FROM sprints WHERE sprint_index = $1', [testSprintIndex]);
     
-    console.log('✅ All constraint fix tests passed');
+    console.log('All constraint fix tests passed');
     
   } catch (error) {
-    console.error('❌ Constraint fix tests failed:', error);
+    console.error('Constraint fix tests failed:', error);
     throw error;
   }
 }
@@ -181,23 +181,23 @@ async function testConstraintFixes() {
  */
 async function main() {
   try {
-    console.log('🚀 Starting database constraint fixes migration...');
+    console.log('Starting database constraint fixes migration...');
     
     await runConstraintFixes();
     await testConstraintFixes();
     
-    console.log('🎉 Database constraint fixes migration completed successfully!');
+    console.log('Database constraint fixes migration completed successfully');
     console.log('');
     console.log('Summary of fixes applied:');
-    console.log('- ✅ Users table: Fixed to allow same user in multiple disciplines');
-    console.log('- ✅ Sprints table: Fixed to handle duplicate sprint indexes gracefully');
-    console.log('- ✅ Overrides table: Added constraint to prevent duplicate requests');
-    console.log('- ✅ Current state table: Fixed constraint handling for concurrent updates');
-    console.log('- ✅ Added proper indexes for performance');
-    console.log('- ✅ Added retry logic and error handling');
+    console.log('- Users table: Fixed to allow same user in multiple disciplines');
+    console.log('- Sprints table: Fixed to handle duplicate sprint indexes gracefully');
+    console.log('- Overrides table: Added constraint to prevent duplicate requests');
+    console.log('- Current state table: Fixed constraint handling for concurrent updates');
+    console.log('- Added proper indexes for performance');
+    console.log('- Added retry logic and error handling');
     
   } catch (error) {
-    console.error('💥 Migration failed:', error);
+    console.error('Migration failed:', error);
     process.exit(1);
   }
 }

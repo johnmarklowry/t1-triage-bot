@@ -1,5 +1,5 @@
 // Quick test to verify database connection and run migrations
-require('dotenv').config({ path: '.env.local' });
+require('./loadEnv').loadEnv();
 const { query } = require('./db/connection');
 const { runMigrations } = require('./db/migrate');
 

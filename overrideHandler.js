@@ -2,12 +2,13 @@
  * overrideHandler.js
  * Updated to use PostgreSQL database with transaction support
  ********************************/
-require('dotenv').config();
+require('./loadEnv').loadEnv();
 const fs = require('fs');
 const path = require('path');
 const { slackApp, receiver } = require('./appHome');
 const { getEnvironmentCommand } = require('./commandUtils');
-const { buildOverrideRequestModal } = require('./overrideModal');
+const { buildOverrideRequestModal, buildOverrideStep2Modal, buildMinimalDebugModal } = require('./overrideModal');
+const cache = require('./cache/redisClient');
 
 // Import database repositories
 const { UsersRepository, OverridesRepository } = require('./db/repository');
@@ -15,6 +16,7 @@ const { UsersRepository, OverridesRepository } = require('./db/repository');
 // Path to JSON data (kept for fallback)
 const OVERRIDES_FILE = path.join(__dirname, 'overrides.json');
 const DISCIPLINES_FILE = path.join(__dirname, 'disciplines.json');
+const SPRINTS_FILE = path.join(__dirname, 'sprints.json');
 
 // Configuration
 const USE_DATABASE = process.env.USE_DATABASE !== 'false';
@@ -49,6 +51,31 @@ function getDisciplines() {
     console.error("Error loading disciplines:", err);
     return {};
   }
+}
+
+function getSprints() {
+  try {
+    const data = fs.readFileSync(SPRINTS_FILE, 'utf8');
+    return JSON.parse(data);
+  } catch (err) {
+    console.error("Error loading sprints:", err);
+    return [];
+  }
+}
+
+function formatSprintLabel(sprintIndex) {
+  const idx = Number.parseInt(String(sprintIndex), 10);
+  if (!Number.isFinite(idx)) return `Sprint ${sprintIndex}`;
+
+  const sprints = getSprints();
+  const sprint = Array.isArray(sprints) ? sprints[idx] : null;
+  if (!sprint) return `Sprint ${idx}`;
+
+  const name = sprint.sprintName || `Sprint ${idx}`;
+  const start = sprint.startDate || '';
+  const end = sprint.endDate || '';
+  const range = start && end ? `${start} to ${end}` : (start || end || '');
+  return range ? `${name} (${range})` : name;
 }
 
 /* =========================
@@ -114,6 +141,8 @@ async function addOverrideRequest(overrideData) {
 
   try {
     await OverridesRepository.addOverride(overrideData, overrideData.requestedBy);
+    await cache.del('overrides:all');
+    await cache.del(`sprintUsers:${overrideData.sprintIndex}`);
     
     // Dual-write to JSON if enabled
     if (DUAL_WRITE_MODE) {
@@ -164,6 +193,8 @@ async function approveOverride(sprintIndex, role, requestedBy, replacementSlackI
     const result = await OverridesRepository.approveOverride(
       sprintIndex, role, requestedBy, replacementSlackId, approvedBy
     );
+    await cache.del('overrides:all');
+    await cache.del(`sprintUsers:${sprintIndex}`);
     
     // Dual-write to JSON if enabled
     if (DUAL_WRITE_MODE && result) {
@@ -226,6 +257,8 @@ async function declineOverride(sprintIndex, role, requestedBy, replacementSlackI
     const result = await OverridesRepository.declineOverride(
       sprintIndex, role, requestedBy, replacementSlackId, declinedBy
     );
+    await cache.del('overrides:all');
+    await cache.del(`sprintUsers:${sprintIndex}`);
     
     // Dual-write to JSON if enabled
     if (DUAL_WRITE_MODE) {
@@ -291,17 +324,49 @@ async function getAllOverrides() {
 slackApp.command(getEnvironmentCommand('triage-override'), async ({ command, ack, client, logger }) => {
   await ack();
 
+  const interactivityPointer =
+    command?.interactivity?.interactivity_pointer ||
+    command?.interactivity_pointer ||
+    null;
+
   // Determine user's role
   const userRole = await getUserRole(command.user_id);
+
   // Build the modal for requesting an override
   const modalView = buildOverrideRequestModal(command.user_id);
+
   try {
-    await client.views.open({
-      trigger_id: command.trigger_id,
+    // Open minimal probe first, then update to the real modal.
+    const probeView = buildMinimalDebugModal({
+      title: 'Request Coverage',
+      bodyText: 'Opening coverage request…',
+      callbackId: 'debug_probe_triage_override'
+    });
+
+    const openArgs = interactivityPointer
+      ? { interactivity_pointer: interactivityPointer, view: probeView }
+      : { trigger_id: command.trigger_id, view: probeView };
+
+    const result = await client.views.open(openArgs);
+
+    await client.views.update({
+      view_id: result.view.id,
+      hash: result.view.hash,
       view: modalView
     });
   } catch (error) {
     logger.error("Error opening override modal:", error);
+
+    // If views.open fails with internal_error, try a simple chat.postMessage to see if other Web API calls succeed.
+    if (error?.data?.error === 'internal_error') {
+      try {
+        const msg = await client.chat.postMessage({
+          channel: command.channel_id,
+          text: "Debug: `views.open` returned `internal_error` while opening the override modal."
+        });
+      } catch (e) {
+      }
+    }
   }
 });
 
@@ -313,12 +378,153 @@ slackApp.shortcut('request_coverage_shortcut', async ({ shortcut, ack, client, l
   try {
     const userId = shortcut.user.id;
     const modalView = buildOverrideRequestModal(userId);
-    await client.views.open({
+    const probeView = buildMinimalDebugModal({
+      title: 'Request Coverage',
+      bodyText: 'Opening coverage request…',
+      callbackId: 'debug_probe_shortcut'
+    });
+
+    const opened = await client.views.open({
       trigger_id: shortcut.trigger_id,
+      view: probeView
+    });
+
+    await client.views.update({
+      view_id: opened.view.id,
+      hash: opened.view.hash,
       view: modalView
     });
   } catch (err) {
     logger.error("Error opening coverage request modal from shortcut:", err);
+  }
+});
+
+/**
+ * Step 1 -> Step 2 transition:
+ * When a user selects a sprint in the Step 1 modal, update the view to Step 2.
+ */
+slackApp.action('sprint_select', async ({ ack, body, client, logger }) => {
+  await ack();
+  try {
+    const view = body?.view;
+    const action = body?.actions?.[0];
+    const selectedValue = action?.selected_option?.value;
+
+    if (!view?.id || !selectedValue || selectedValue === 'none') {
+      return;
+    }
+
+    // Only transition from Step 1; if a user changes sprint in Step 2, we leave it as-is.
+    if (view.callback_id && view.callback_id !== 'override_request_step1') {
+      return;
+    }
+
+    if (typeof logger?.info === 'function') {
+      logger.info('[overrideHandler] Sprint selected in Step 1 modal', {
+        callbackId: view.callback_id,
+        requester: body?.user?.id,
+        selectedValue
+      });
+    }
+
+    let metadata = {};
+    try {
+      metadata = JSON.parse(view.private_metadata || '{}');
+    } catch {
+      metadata = {};
+    }
+
+    const requesterSlackId = metadata.requester || body?.user?.id;
+    let role = metadata.role || null;
+    if (!role && requesterSlackId) {
+      role = await getUserRole(requesterSlackId);
+    }
+
+    const sprintIndex = parseInt(selectedValue, 10);
+    if (!Number.isFinite(sprintIndex) || !requesterSlackId || !role) {
+      return;
+    }
+
+    const nextView = buildOverrideStep2Modal({ requesterSlackId, role, sprintIndex });
+    await client.views.update({
+      view_id: view.id,
+      hash: view.hash,
+      view: nextView
+    });
+  } catch (error) {
+    logger.error('[overrideHandler] Error transitioning to Step 2 modal:', error, {
+      errorMessage: error.message,
+      errorCode: error.code,
+      responseMetadata: error.data?.response_metadata
+    });
+  }
+});
+
+/**
+ * external_select options handler for replacement search.
+ * Returns up to 100 role-filtered user options (excluding requester).
+ */
+slackApp.options('replacement_select', async ({ ack, body, payload, logger }) => {
+  try {
+    const query = (payload?.value || body?.value || '').toString().trim().toLowerCase();
+    const view = body?.view;
+
+    let metadata = {};
+    try {
+      metadata = JSON.parse(view?.private_metadata || '{}');
+    } catch {
+      metadata = {};
+    }
+
+    const requesterSlackId = metadata.requester || body?.user?.id;
+    let role = metadata.role || null;
+    if (!role && requesterSlackId) {
+      role = await getUserRole(requesterSlackId);
+    }
+
+    if (!role) {
+      await ack({ options: [] });
+      return;
+    }
+
+    const disciplines = USE_DATABASE ? await UsersRepository.getDisciplines() : getDisciplines();
+    const roleList = Array.isArray(disciplines?.[role]) ? disciplines[role] : [];
+
+    const matches = roleList
+      .filter(u => u && u.slackId && u.slackId !== requesterSlackId)
+      .filter(u => {
+        if (!query) return true;
+        const name = (u.name || '').toString().toLowerCase();
+        const slackId = (u.slackId || '').toString().toLowerCase();
+        return name.includes(query) || slackId.includes(query);
+      })
+      .slice(0, 100)
+      .map(u => {
+        const name = (u.name || u.slackId || 'Unknown').toString();
+        const safeName = name.length > 75 ? `${name.slice(0, 72)}...` : name;
+        return {
+          text: { type: 'plain_text', text: safeName },
+          value: u.slackId.toString()
+        };
+      });
+
+    if (typeof logger?.info === 'function') {
+      logger.info('[overrideHandler] Replacement options served', {
+        role,
+        requester: requesterSlackId,
+        query: query || '',
+        returned: matches.length
+      });
+    }
+
+    await ack({ options: matches });
+  } catch (error) {
+    logger.error('[overrideHandler] Error serving replacement options:', error, {
+      errorMessage: error.message,
+      errorCode: error.code,
+      responseMetadata: error.data?.response_metadata
+    });
+    await ack({ options: [] });
   }
 });
 
@@ -338,6 +544,7 @@ slackApp.view('override_request_modal', async ({ ack, body, view, client, logger
     // Extract the selected sprint index
     const sprintIndexStr = view.state.values.sprint_selection.sprint_select.selected_option.value;
     const sprintIndex = parseInt(sprintIndexStr, 10);
+    const sprintLabel = formatSprintLabel(sprintIndex);
 
     // Extract the replacement Slack ID
     const replacementSlackId = view.state.values.replacement.replacement_select.selected_option.value;
@@ -368,13 +575,13 @@ slackApp.view('override_request_modal', async ({ ack, body, view, client, logger
     // Notify admin channel with Approve/Decline buttons
     await client.chat.postMessage({
       channel: process.env.ADMIN_CHANNEL_ID,
-      text: `Override Request: <@${requesterId}> has requested an override for *${requesterRole}* on sprint index ${sprintIndex}. Replacement: <@${replacementSlackId}> (${replacementName}). Please review and approve.`,
+      text: `Override Request: <@${requesterId}> has requested an override for *${requesterRole}* on *${sprintLabel}*. Replacement: <@${replacementSlackId}> (${replacementName}). Please review and approve.`,
       blocks: [
         {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `Override Request: <@${requesterId}> has requested an override for *${requesterRole}* on sprint index ${sprintIndex}.\nReplacement: <@${replacementSlackId}> (${replacementName}).`
+            text: `Override Request: <@${requesterId}> has requested an override for *${requesterRole}* on *${sprintLabel}*.\nReplacement: <@${replacementSlackId}> (${replacementName}).`
           }
         },
         {
@@ -387,6 +594,7 @@ slackApp.view('override_request_modal', async ({ ack, body, view, client, logger
               action_id: "approve_override",
               value: JSON.stringify({ 
                 sprintIndex, 
+                sprintLabel,
                 role: requesterRole, 
                 replacementSlackId, 
                 replacementName, 
@@ -400,6 +608,7 @@ slackApp.view('override_request_modal', async ({ ack, body, view, client, logger
               action_id: "decline_override",
               value: JSON.stringify({ 
                 sprintIndex, 
+                sprintLabel,
                 role: requesterRole, 
                 replacementSlackId, 
                 requesterId 
@@ -422,6 +631,7 @@ slackApp.action('approve_override', async ({ ack, body, client, logger }) => {
   await ack();
   try {
     const overrideInfo = JSON.parse(body.actions[0].value);
+    const sprintLabel = overrideInfo.sprintLabel || formatSprintLabel(overrideInfo.sprintIndex);
     
     const result = await approveOverride(
       overrideInfo.sprintIndex,
@@ -435,29 +645,30 @@ slackApp.action('approve_override', async ({ ack, body, client, logger }) => {
       // Notify the requester and replacement
       await client.chat.postMessage({
         channel: overrideInfo.requesterId,
-        text: `Your override request for ${overrideInfo.role} on sprint index ${overrideInfo.sprintIndex} has been approved.`
+        text: `Your override request for ${overrideInfo.role} on ${sprintLabel} has been approved.`
       });
       await client.chat.postMessage({
         channel: overrideInfo.replacementSlackId,
-        text: `You have been approved as the replacement for ${overrideInfo.role} on sprint index ${overrideInfo.sprintIndex}.`
+        text: `You have been approved as the replacement for ${overrideInfo.role} on ${sprintLabel}.`
       });
       
       // Update the admin channel message
       await client.chat.update({
         channel: body.channel.id,
         ts: body.message.ts,
-        text: "Override Approved (Details in blocks)",
+        text: "Override Approved",
         blocks: [
           {
             type: "section",
             text: {
               type: "mrkdwn",
-              text: `:white_check_mark: *Override Approved*\n` +
-                     `*Sprint Index:* ${overrideInfo.sprintIndex}\n` +
-                     `*Role:* ${overrideInfo.role}\n` +
-                     `*Requested By:* <@${overrideInfo.requesterId}>\n` +
-                     `*Replacement:* <@${overrideInfo.replacementSlackId}> (${overrideInfo.replacementName || overrideInfo.replacementSlackId})\n` +
-                     `*Approved By:* <@${body.user.id}> at ${result.approvalTimestamp || new Date().toISOString()}\n`
+              text:
+                `*Override Approved*\n` +
+                `Sprint: ${sprintLabel}\n` +
+                `Role: ${overrideInfo.role}\n` +
+                `Requested By: <@${overrideInfo.requesterId}>\n` +
+                `Replacement: <@${overrideInfo.replacementSlackId}> (${overrideInfo.replacementName || overrideInfo.replacementSlackId})\n` +
+                `Approved By: <@${body.user.id}> at ${result.approvalTimestamp || new Date().toISOString()}`
             }
           }
         ]
@@ -476,6 +687,7 @@ slackApp.action('decline_override', async ({ ack, body, client, logger }) => {
   await ack();
   try {
     const overrideInfo = JSON.parse(body.actions[0].value);
+    const sprintLabel = overrideInfo.sprintLabel || formatSprintLabel(overrideInfo.sprintIndex);
     
     const result = await declineOverride(
       overrideInfo.sprintIndex,
@@ -489,25 +701,26 @@ slackApp.action('decline_override', async ({ ack, body, client, logger }) => {
       // Notify the requester
       await client.chat.postMessage({
         channel: overrideInfo.requesterId,
-        text: `Your override request for ${overrideInfo.role} on sprint index ${overrideInfo.sprintIndex} has been declined.`
+        text: `Your override request for ${overrideInfo.role} on ${sprintLabel} has been declined.`
       });
       
       // Update the admin channel message
       await client.chat.update({
         channel: body.channel.id,
         ts: body.message.ts,
-        text: "Override Declined (Details in blocks)",
+        text: "Override Declined",
         blocks: [
           {
             type: "section",
             text: {
               type: "mrkdwn",
-              text: `:x: *Override Declined*\n` +
-                     `*Sprint Index:* ${overrideInfo.sprintIndex}\n` +
-                     `*Role:* ${overrideInfo.role}\n` +
-                     `*Requested By:* <@${overrideInfo.requesterId}>\n` +
-                     `*Replacement:* <@${overrideInfo.replacementSlackId}>\n` +
-                     `*Declined By:* <@${body.user.id}> at ${new Date().toISOString()}\n`
+              text:
+                `*Override Declined*\n` +
+                `Sprint: ${sprintLabel}\n` +
+                `Role: ${overrideInfo.role}\n` +
+                `Requested By: <@${overrideInfo.requesterId}>\n` +
+                `Replacement: <@${overrideInfo.replacementSlackId}>\n` +
+                `Declined By: <@${body.user.id}> at ${new Date().toISOString()}`
             }
           }
         ]
@@ -629,6 +842,8 @@ slackApp.action('admin_remove_override', async ({ ack, body, client, logger }) =
           removed.newSlackId,
           body.user.id
         );
+        await cache.del('overrides:all');
+        await cache.del(`sprintUsers:${removed.sprintIndex}`);
       } catch (error) {
         console.error('[admin_remove_override] Database error:', error);
         // Fallback to JSON removal

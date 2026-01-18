@@ -1,0 +1,84 @@
+{
+  "type": "appHome_modal_open",
+  "userId": "U03BLBAESRF",
+  "triggerId": "10311992521109.2151826716.4eeaf848a6db36b356dc9361d11d6dda",
+  "modalView": {
+    "type": "modal",
+    "callback_id": "override_request_step1",
+    "private_metadata": "{\"role\":\"po\",\"requester\":\"U03BLBAESRF\"}",
+    "title": {
+      "type": "plain_text",
+      "text": "Request Coverage"
+    },
+    "close": {
+      "type": "plain_text",
+      "text": "Cancel"
+    },
+    "blocks": [
+      {
+        "type": "section",
+        "text": {
+          "type": "mrkdwn",
+          "text": "Select the sprint you need coverage for. You’ll choose a replacement on the next step."
+        }
+      },
+      {
+        "type": "input",
+        "block_id": "sprint_selection",
+        "element": {
+          "type": "static_select",
+          "action_id": "sprint_select",
+          "placeholder": {
+            "type": "plain_text",
+            "text": "Select a sprint"
+          },
+          "options": [
+            {
+              "text": {
+                "type": "plain_text",
+                "text": "FY26 Sp4 (05/08/2025 - 05/21/2025)"
+              },
+              "value": "4"
+            },
+            {
+              "text": {
+                "type": "plain_text",
+                "text": "FY26 Sp10 (07/31/2025 - 08/13/2025)"
+              },
+              "value": "10"
+            },
+            {
+              "text": {
+                "type": "plain_text",
+                "text": "FY26 Sp16 (10/23/2025 - 11/05/2025)"
+              },
+              "value": "16"
+            },
+            {
+              "text": {
+                "type": "plain_text",
+                "text": "FY26 Sp22 (01/15/2026 - 01/28/2026)"
+              },
+              "value": "22"
+            }
+          ]
+        },
+        "label": {
+          "type": "plain_text",
+          "text": "Which sprint do you need coverage for?"
+        }
+      },
+      {
+        "type": "context",
+        "block_id": "note",
+        "elements": [
+          {
+            "type": "mrkdwn",
+            "text": "If you don’t see the right sprint, contact an admin to verify the sprint schedule and rotation lists."
+          }
+        ]
+      }
+    ]
+  },
+  "timestamp": "2026-01-16T21:11:28.226Z"
+}

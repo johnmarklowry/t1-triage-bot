@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "dev": "node --inspect server.js",
     "migrate": "node -e \"require('./db/migrate').runMigrations().then(() => process.exit(0))\"",
     "migrate-data": "node db/migrate-json-data.js",
     "db-status": "node -e \"require('./db/migrate').getMigrationStatus().then(status => { console.log(JSON.stringify(status, null, 2)); process.exit(0); })\"",
@@ -21,8 +22,8 @@
     "@fastify/formbody": "^7.4.0",
     "@fastify/static": "^6.10.2",
     "@fastify/view": "^8.0.0",
-    "@slack/bolt": "^3.12.2",
-    "@slack/web-api": "^6.9.0",
+    "@slack/bolt": "^4.6.0",
+    "@slack/web-api": "^7.0.0",
     "dayjs": "^1.11.13",
     "dotenv": "^16.0.0",
     "express": "^4.18.2",
@@ -33,6 +34,7 @@
     "openai": "^4.24.1",
     "pg": "^8.11.3",
     "pg-pool": "^3.6.1",
+    "redis": "^4.7.0",
     "@prisma/client": "^5.22.0",
     "prisma": "^5.22.0"
   },

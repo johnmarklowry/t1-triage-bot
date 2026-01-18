@@ -168,3 +168,10 @@ prisma.sprint.findUnique({
 - ✅ No database schema changes required
 - ✅ Existing application code can be updated to use new types
 
+
+
+
+
+
+
+

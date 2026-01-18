@@ -339,12 +339,17 @@ function getUserOnCallStatus(userId, currentRotation) {
  * @param {string} userId - Slack user ID
  * @param {Array} sprints - Array of all sprints
  * @param {Object} disciplines - Disciplines object with role arrays
+ * @param {Object} [options]
+ * @param {number} [options.limit] - Maximum number of shifts to return (for preview/paging)
  * @returns {Promise<Array>} Array of upcoming shift objects
  */
-async function getUserUpcomingShifts(userId, sprints, disciplines) {
+async function getUserUpcomingShifts(userId, sprints, disciplines, options = {}) {
   if (!userId || !sprints || !disciplines) {
     return [];
   }
+
+  const rawLimit = Number(options?.limit);
+  const limit = Number.isFinite(rawLimit) ? Math.max(1, rawLimit) : null;
   
   // Find which role the user is in
   let userRole = null;
@@ -366,6 +371,29 @@ async function getUserUpcomingShifts(userId, sprints, disciplines) {
   const roleList = disciplines[userRole];
   const upcomingShifts = [];
   const today = dayjs().tz("America/Los_Angeles");
+
+  // Build lookup for Slack ID -> display name (for nicer team display)
+  const nameBySlackId = {};
+  if (disciplines && typeof disciplines === 'object') {
+    for (const users of Object.values(disciplines)) {
+      if (!Array.isArray(users)) continue;
+      for (const u of users) {
+        if (u?.slackId && u?.name && !nameBySlackId[u.slackId]) {
+          nameBySlackId[u.slackId] = u.name;
+        }
+      }
+    }
+  }
+
+  // Load overrides once (avoid per-sprint reads) and index them for fast lookup
+  const overrides = await readOverrides();
+  const overrideBySprintRole = new Map();
+  for (const o of (Array.isArray(overrides) ? overrides : [])) {
+    if (!o || o.approved !== true) continue;
+    if (o.sprintIndex === null || o.sprintIndex === undefined) continue;
+    if (!o.role) continue;
+    overrideBySprintRole.set(`${o.sprintIndex}:${o.role}`, o);
+  }
   
   // Check each sprint to see if user is scheduled
   for (let i = 0; i < sprints.length; i++) {
@@ -374,36 +402,56 @@ async function getUserUpcomingShifts(userId, sprints, disciplines) {
     
     // Only include future sprints
     if (sprintStart.isAfter(today) || sprintStart.isSame(today, 'day')) {
-      // Calculate if user is assigned to this sprint
+      const override = overrideBySprintRole.get(`${i}:${userRole}`) || null;
+
+      // Calculate if user is assigned to this sprint (base rotation)
       const assignedIndex = i % roleList.length;
-      if (assignedIndex === userIndex) {
-        // Check for overrides
-        const overrides = await readOverrides();
-        const override = overrides.find(o =>
-          o.sprintIndex === i &&
-          o.role === userRole &&
-          o.approved === true
-        );
-        
-        // If there's an approved override replacing this user, skip it
-        if (override && override.newSlackId !== userId) {
+      const isBaseAssigned = assignedIndex === userIndex;
+
+      // Overrides can either remove the user from their base shift, or assign them to cover.
+      const isAssignedByOverride = !!override && override.newSlackId === userId;
+      const isRemovedByOverride = isBaseAssigned && !!override && override.newSlackId !== userId;
+
+      const shouldInclude = (isBaseAssigned && !isRemovedByOverride) || isAssignedByOverride;
+      if (!shouldInclude) continue;
+
+      const sprintUsers = await getSprintUsers(i);
+      const rotationLines = [];
+      for (const role of ["account", "producer", "po", "uiEng", "beEng"]) {
+        const slackId = sprintUsers?.[role] || null;
+        const displayRole = ROLE_DISPLAY[role] || role;
+        if (!slackId) {
+          rotationLines.push(`*${displayRole}*: _Unassigned_`);
           continue;
         }
-        
-        upcomingShifts.push({
-          sprintIndex: i,
-          sprintName: sprint.sprintName,
-          startDate: sprint.startDate,
-          endDate: sprint.endDate,
-          role: userRole,
-          roleDisplay: ROLE_DISPLAY[userRole] || userRole,
-          daysUntil: formatDaysUntil(sprint.startDate)
-        });
+        const name = nameBySlackId[slackId];
+        const suffix = slackId === userId ? ' (you)' : '';
+        rotationLines.push(
+          name
+            ? `*${displayRole}*: ${name} (<@${slackId}>)${suffix}`
+            : `*${displayRole}*: <@${slackId}>${suffix}`
+        );
+      }
+
+      upcomingShifts.push({
+        sprintIndex: i,
+        sprintName: sprint.sprintName,
+        startDate: sprint.startDate,
+        endDate: sprint.endDate,
+        role: userRole,
+        roleDisplay: ROLE_DISPLAY[userRole] || userRole,
+        daysUntil: formatDaysUntil(sprint.startDate),
+        rotationUsers: sprintUsers || null,
+        rotationText: rotationLines.join('\n')
+      });
+
+      if (limit && upcomingShifts.length >= limit) {
+        break;
       }
     }
   }
   
-  return upcomingShifts.slice(0, 5); // Limit to next 5 shifts
+  return upcomingShifts;
 }
 
 /**
@@ -648,15 +696,19 @@ function buildUserUpcomingShiftsBlocks(upcomingShifts, userId) {
     buildHeaderBlock('Your Upcoming Shifts')
   ];
   
-  upcomingShifts.forEach(shift => {
+  upcomingShifts.forEach((shift, idx) => {
     const startFormatted = dayjs(`${shift.startDate}T00:00:00-07:00`).format("MMM D");
     const endFormatted = dayjs(`${shift.endDate}T00:00:00-07:00`).format("MMM D");
+
+    const teamText = shift.rotationText
+      ? `\n\n*Team on rotation*\n${shift.rotationText}`
+      : '';
     
     blocks.push({
       type: 'section',
       text: {
         type: 'mrkdwn',
-          text: `*${shift.sprintName}*\n${shift.roleDisplay} • ${startFormatted} - ${endFormatted} • ${shift.daysUntil}`
+          text: `*${shift.sprintName}*\n${shift.roleDisplay} • ${startFormatted} - ${endFormatted} • ${shift.daysUntil}${teamText}`
       },
       accessory: {
         type: 'button',
@@ -665,8 +717,17 @@ function buildUserUpcomingShiftsBlocks(upcomingShifts, userId) {
         value: JSON.stringify({ userId, sprintIndex: shift.sprintIndex })
       }
     });
+
+    if (idx !== upcomingShifts.length - 1) {
+      blocks.push({ type: 'divider' });
+    }
   });
   
+  // Safety: keep Home well under Slack’s 50 block limit
+  if (blocks.length > 50) {
+    blocks.splice(50);
+  }
+
   return blocks;
 }
 
@@ -1222,8 +1283,13 @@ function formatDisciplines(discObj) {
  * Builds a modal view that lists upcoming sprints with their on-call rotations
  * @returns {Promise<Object>} Modal view object
  */
-async function buildUpcomingSprintsModal() {
+async function buildUpcomingSprintsModal(options = {}) {
   try {
+    const DEFAULT_PAGE_SIZE = 10;
+    const pageSize = Number.isFinite(Number(options.pageSize))
+      ? Math.max(1, Number(options.pageSize))
+      : DEFAULT_PAGE_SIZE;
+
     // Load data asynchronously
     const currentState = await readCurrentState();
     const allSprints = await readSprints();
@@ -1252,20 +1318,40 @@ async function buildUpcomingSprintsModal() {
       { type: "divider" }
     ];
 
+    // Build a quick lookup for Slack ID -> name (for nicer display)
+    const nameBySlackId = {};
+    if (disciplines && typeof disciplines === 'object') {
+      for (const users of Object.values(disciplines)) {
+        if (!Array.isArray(users)) continue;
+        for (const u of users) {
+          if (u?.slackId && u?.name && !nameBySlackId[u.slackId]) {
+            nameBySlackId[u.slackId] = u.name;
+          }
+        }
+      }
+    }
+
+    const totalUpcoming = upcomingSprints.length;
+    const sprintsToShow = upcomingSprints.slice(0, pageSize);
+
     // For each upcoming sprint, compute the actual sprint index in the full sprints array.
-    for (let i = 0; i < upcomingSprints.length; i++) {
-      const sprint = upcomingSprints[i];
+    for (let i = 0; i < sprintsToShow.length; i++) {
+      const sprint = sprintsToShow[i];
       const actualIndex = startingIndex + i;
       // Format dates properly by adding T00:00:00 to ensure they're interpreted as midnight PT
       const startFormatted = dayjs(`${sprint.startDate}T00:00:00-07:00`).format('ddd MM/DD/YYYY');
       const endFormatted = dayjs(`${sprint.endDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
       
       let rotationText = "";
+      const sprintUsers = await getSprintUsers(actualIndex);
       for (const role of ["account", "producer", "po", "uiEng", "beEng"]) {
-        const user = await getOnCallForSprint(actualIndex, role, disciplines);
+        const slackId = sprintUsers?.[role] || null;
         const displayRole = ROLE_DISPLAY[role] || role;
-        if (user) {
-          rotationText += `*${displayRole}*: ${user.name} (<@${user.slackId}>)\n`;
+        if (slackId) {
+          const name = nameBySlackId[slackId];
+          rotationText += name
+            ? `*${displayRole}*: ${name} (<@${slackId}>)\n`
+            : `*${displayRole}*: <@${slackId}>\n`;
         } else {
           rotationText += `*${displayRole}*: _Unassigned_\n`;
         }
@@ -1281,12 +1367,52 @@ async function buildUpcomingSprintsModal() {
       blocks.push({ type: "divider" });
     }
 
+    // Remove trailing divider for cleaner UI
+    if (blocks.length > 0 && blocks[blocks.length - 1]?.type === 'divider') {
+      blocks.pop();
+    }
+
+    // Paging / Load more CTA
+    const shownCount = sprintsToShow.length;
+    blocks.push({ type: "divider" });
+    blocks.push({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: totalUpcoming > 0
+            ? `_Showing ${shownCount} of ${totalUpcoming} upcoming sprints_`
+            : `_No upcoming sprints found_`
+        }
+      ]
+    });
+
+    if (shownCount < totalUpcoming) {
+      const nextPageSize = Math.min(totalUpcoming, pageSize + DEFAULT_PAGE_SIZE);
+      blocks.push({
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            text: { type: "plain_text", text: "Load more" },
+            action_id: "load_more_upcoming_sprints",
+            value: JSON.stringify({ pageSize: nextPageSize })
+          }
+        ]
+      });
+    }
+
+    // Slack modal limit is 100 blocks; keep ourselves well below it.
+    if (blocks.length > 100) {
+      blocks.splice(100);
+    }
+
     return {
       type: "modal",
       callback_id: "upcoming_sprints_modal",
       title: { type: "plain_text", text: "Upcoming Sprints" },
-      submit: { type: "plain_text", text: "Close" },
-      close: { type: "plain_text", text: "Cancel" },
+      close: { type: "plain_text", text: "Close" },
+      private_metadata: JSON.stringify({ pageSize }),
       blocks
     };
   } catch (error) {
@@ -1422,8 +1548,6 @@ slackApp.action('open_upcoming_sprints', async ({ ack, body, client, logger }) =
       }
       return;
     }
-    
-    const modalView = await buildUpcomingSprintsModal();
 
     const { buildMinimalDebugModal } = require('./overrideModal');
     const probeView = buildMinimalDebugModal({
@@ -1432,15 +1556,23 @@ slackApp.action('open_upcoming_sprints', async ({ ack, body, client, logger }) =
       callbackId: 'debug_probe_upcoming_sprints'
     });
 
-    await openWithProbe({
-      client,
-      triggerId,
-      interactivityPointer: null,
-      probeView,
-      realView: modalView,
-      logger,
-      label: 'open_upcoming_sprints'
+    // IMPORTANT: consume trigger_id ASAP (it expires quickly). We open the probe first,
+    // then build the heavier view and update the modal.
+    const openResult = await client.views.open({ trigger_id: triggerId, view: probeView });
+
+    const modalView = await buildUpcomingSprintsModal();
+
+    await client.views.update({
+      view_id: openResult.view.id,
+      hash: openResult.view.hash,
+      view: modalView
     });
+
+    if (typeof logger?.info === 'function') {
+      logger.info('[appHome] Opened upcoming sprints modal via probe->update', {
+        viewId: openResult?.view?.id
+      });
+    }
   } catch (error) {
     logger.error("Error opening upcoming sprints modal:", error, {
       errorMessage: error.message,
@@ -1459,6 +1591,49 @@ slackApp.action('open_upcoming_sprints', async ({ ack, body, client, logger }) =
     } catch (fallbackError) {
       logger.error("Error sending fallback message:", fallbackError);
     }
+  }
+});
+
+/**
+ * Action handler: Load more upcoming sprints (updates the existing modal; no trigger_id needed).
+ */
+slackApp.action('load_more_upcoming_sprints', async ({ ack, body, client, logger }) => {
+  await ack();
+  try {
+    const nextFromValue = (() => {
+      const raw = body?.actions?.[0]?.value;
+      if (!raw) return null;
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return null;
+      }
+    })();
+
+    const meta = (() => {
+      const raw = body?.view?.private_metadata;
+      if (!raw) return {};
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return {};
+      }
+    })();
+
+    const nextPageSize =
+      Number.isFinite(Number(nextFromValue?.pageSize))
+        ? Number(nextFromValue.pageSize)
+        : (Number.isFinite(Number(meta?.pageSize)) ? Number(meta.pageSize) + 10 : 20);
+
+    const updatedView = await buildUpcomingSprintsModal({ pageSize: nextPageSize });
+
+    await client.views.update({
+      view_id: body.view.id,
+      hash: body.view.hash,
+      view: updatedView
+    });
+  } catch (error) {
+    logger?.error?.('[appHome] Error loading more upcoming sprints', error);
   }
 });
 
@@ -1609,37 +1784,48 @@ slackApp.action('view_my_schedule', async ({ ack, body, client, logger }) => {
       return;
     }
     
-    // Get user's upcoming shifts
+    const { buildMinimalDebugModal } = require('./overrideModal');
+    const probeView = buildMinimalDebugModal({
+      title: 'My Schedule',
+      bodyText: 'Opening schedule…',
+      callbackId: 'debug_probe_my_schedule'
+    });
+
+    // Consume trigger_id ASAP, then build the heavier view and update.
+    const openResult = await client.views.open({ trigger_id: body.trigger_id, view: probeView });
+
+    const DEFAULT_PAGE_SIZE = 10;
     const sprints = await readSprints();
     const disciplines = await readDisciplines();
-    const upcomingShifts = await getUserUpcomingShifts(userId, sprints, disciplines);
-    
-    // Build modal with user's schedule
+    const shiftsPlusOne = await getUserUpcomingShifts(userId, sprints, disciplines, { limit: DEFAULT_PAGE_SIZE + 1 });
+
+    const hasMore = shiftsPlusOne.length > DEFAULT_PAGE_SIZE;
+    const shiftsToShow = shiftsPlusOne.slice(0, DEFAULT_PAGE_SIZE);
+
     const blocks = [
-      {
-        type: 'header',
-        text: { type: 'plain_text', text: 'Your Schedule' }
-      },
+      { type: 'header', text: { type: 'plain_text', text: 'Your Schedule' } },
       { type: 'divider' }
     ];
-    
-    if (upcomingShifts.length === 0) {
+
+    if (shiftsToShow.length === 0) {
       blocks.push({
         type: 'section',
         text: { type: 'mrkdwn', text: '_No upcoming shifts scheduled._' }
       });
     } else {
-      // Limit to prevent modal size issues (Slack has max 100 blocks)
-      const shiftsToShow = upcomingShifts.slice(0, 10);
-      shiftsToShow.forEach(shift => {
+      shiftsToShow.forEach((shift) => {
         const startFormatted = dayjs(`${shift.startDate}T00:00:00-07:00`).format("ddd, MMM D, YYYY");
         const endFormatted = dayjs(`${shift.endDate}T00:00:00-07:00`).format("ddd, MMM D, YYYY");
-        
+
+        const teamText = shift.rotationText
+          ? `\n\n*Team on rotation*\n${shift.rotationText}`
+          : '';
+
         blocks.push({
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `*${shift.sprintName}*\n${shift.roleDisplay}\n${startFormatted} - ${endFormatted}\n${shift.daysUntil}`
+            text: `*${shift.sprintName}*\n*Your role:* ${shift.roleDisplay}\n${startFormatted} - ${endFormatted}\n${shift.daysUntil}${teamText}`
           },
           accessory: {
             type: 'button',
@@ -1650,52 +1836,55 @@ slackApp.action('view_my_schedule', async ({ ack, body, client, logger }) => {
         });
         blocks.push({ type: 'divider' });
       });
-      
+
       // Remove last divider
       if (blocks[blocks.length - 1].type === 'divider') {
         blocks.pop();
       }
-      
-      if (upcomingShifts.length > shiftsToShow.length) {
+
+      blocks.push({ type: 'divider' });
+      blocks.push({
+        type: 'context',
+        elements: [{
+          type: 'mrkdwn',
+          text: hasMore
+            ? `_Showing ${shiftsToShow.length}+ shifts_`
+            : `_Showing ${shiftsToShow.length} shift${shiftsToShow.length === 1 ? '' : 's'}_`
+        }]
+      });
+
+      if (hasMore) {
         blocks.push({
-          type: 'context',
+          type: 'actions',
           elements: [{
-            type: 'mrkdwn',
-            text: `_Showing ${shiftsToShow.length} of ${upcomingShifts.length} shifts_`
+            type: 'button',
+            text: { type: 'plain_text', text: 'Load more' },
+            action_id: 'load_more_my_schedule',
+            value: JSON.stringify({ userId, pageSize: DEFAULT_PAGE_SIZE + 10 })
           }]
         });
       }
     }
-    
+
     // Validate block count (Slack modal limit is 100 blocks)
     if (blocks.length > 100) {
       logger.warn(`Modal block count (${blocks.length}) exceeds Slack limit of 100 blocks`);
       blocks.splice(100);
     }
-    
+
     const modalView = {
       type: 'modal',
       callback_id: 'my_schedule_modal',
       title: { type: 'plain_text', text: 'My Schedule' },
       close: { type: 'plain_text', text: 'Close' },
+      private_metadata: JSON.stringify({ userId, pageSize: DEFAULT_PAGE_SIZE }),
       blocks
     };
 
-    const { buildMinimalDebugModal } = require('./overrideModal');
-    const probeView = buildMinimalDebugModal({
-      title: 'My Schedule',
-      bodyText: 'Opening schedule…',
-      callbackId: 'debug_probe_my_schedule'
-    });
-
-    await openWithProbe({
-      client,
-      triggerId: body.trigger_id,
-      interactivityPointer: null,
-      probeView,
-      realView: modalView,
-      logger,
-      label: 'view_my_schedule'
+    await client.views.update({
+      view_id: openResult.view.id,
+      hash: openResult.view.hash,
+      view: modalView
     });
   } catch (error) {
     logger.error("Error opening my schedule modal:", error);
@@ -1711,6 +1900,133 @@ slackApp.action('view_my_schedule', async ({ ack, body, client, logger }) => {
     } catch (fallbackError) {
       logger.error("Error sending fallback message:", fallbackError);
     }
+  }
+});
+
+/**
+ * Action handler: Load more entries in the My Schedule modal (views.update; no trigger_id needed).
+ */
+slackApp.action('load_more_my_schedule', async ({ ack, body, client, logger }) => {
+  await ack();
+  try {
+    const fromValue = (() => {
+      const raw = body?.actions?.[0]?.value;
+      if (!raw) return null;
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return null;
+      }
+    })();
+
+    const meta = (() => {
+      const raw = body?.view?.private_metadata;
+      if (!raw) return {};
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return {};
+      }
+    })();
+
+    const userId = fromValue?.userId || meta?.userId || body?.user?.id || null;
+    if (!userId) return;
+
+    const nextPageSizeRaw = Number(fromValue?.pageSize);
+    const nextPageSize = Number.isFinite(nextPageSizeRaw) ? Math.max(1, nextPageSizeRaw) : 20;
+
+    const sprints = await readSprints();
+    const disciplines = await readDisciplines();
+    const shiftsPlusOne = await getUserUpcomingShifts(userId, sprints, disciplines, { limit: nextPageSize + 1 });
+
+    const hasMore = shiftsPlusOne.length > nextPageSize;
+    const shiftsToShow = shiftsPlusOne.slice(0, nextPageSize);
+
+    const blocks = [
+      { type: 'header', text: { type: 'plain_text', text: 'Your Schedule' } },
+      { type: 'divider' }
+    ];
+
+    if (shiftsToShow.length === 0) {
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: '_No upcoming shifts scheduled._' }
+      });
+    } else {
+      shiftsToShow.forEach((shift) => {
+        const startFormatted = dayjs(`${shift.startDate}T00:00:00-07:00`).format("ddd, MMM D, YYYY");
+        const endFormatted = dayjs(`${shift.endDate}T00:00:00-07:00`).format("ddd, MMM D, YYYY");
+
+        const teamText = shift.rotationText
+          ? `\n\n*Team on rotation*\n${shift.rotationText}`
+          : '';
+
+        blocks.push({
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*${shift.sprintName}*\n*Your role:* ${shift.roleDisplay}\n${startFormatted} - ${endFormatted}\n${shift.daysUntil}${teamText}`
+          },
+          accessory: {
+            type: 'button',
+            text: { type: 'plain_text', text: 'Request Coverage' },
+            action_id: 'request_coverage_from_home',
+            value: JSON.stringify({ userId, sprintIndex: shift.sprintIndex })
+          }
+        });
+        blocks.push({ type: 'divider' });
+      });
+
+      // Remove last divider
+      if (blocks[blocks.length - 1].type === 'divider') {
+        blocks.pop();
+      }
+
+      blocks.push({ type: 'divider' });
+      blocks.push({
+        type: 'context',
+        elements: [{
+          type: 'mrkdwn',
+          text: hasMore
+            ? `_Showing ${shiftsToShow.length}+ shifts_`
+            : `_Showing ${shiftsToShow.length} shift${shiftsToShow.length === 1 ? '' : 's'}_`
+        }]
+      });
+
+      if (hasMore) {
+        blocks.push({
+          type: 'actions',
+          elements: [{
+            type: 'button',
+            text: { type: 'plain_text', text: 'Load more' },
+            action_id: 'load_more_my_schedule',
+            value: JSON.stringify({ userId, pageSize: nextPageSize + 10 })
+          }]
+        });
+      }
+    }
+
+    if (blocks.length > 100) {
+      logger?.warn?.(`Modal block count (${blocks.length}) exceeds Slack limit of 100 blocks`);
+      blocks.splice(100);
+    }
+
+    const updatedView = {
+      type: 'modal',
+      callback_id: 'my_schedule_modal',
+      title: { type: 'plain_text', text: 'My Schedule' },
+      close: { type: 'plain_text', text: 'Close' },
+      private_metadata: JSON.stringify({ userId, pageSize: nextPageSize }),
+      blocks
+    };
+
+    await client.views.update({
+      view_id: body.view.id,
+      hash: body.view.hash,
+      view: updatedView
+    });
+  } catch (error) {
+    logger?.error?.('[appHome] Error loading more schedule entries', error);
   }
 });
 
@@ -1967,7 +2283,8 @@ slackApp.event('app_home_opened', async ({ event, client, logger }) => {
       // Get user's upcoming shifts
       try {
         const sprints = await readSprints();
-        upcomingShifts = await getUserUpcomingShifts(userId, sprints, disciplines);
+        // Home tab: lightweight preview
+        upcomingShifts = await getUserUpcomingShifts(userId, sprints, disciplines, { limit: 3 });
       } catch (error) {
         logger.error('[app_home_opened] Error loading user upcoming shifts:', error);
       }

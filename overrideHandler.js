@@ -8,6 +8,7 @@ const path = require('path');
 const { slackApp, receiver } = require('./appHome');
 const { getEnvironmentCommand } = require('./commandUtils');
 const { buildOverrideRequestModal, buildOverrideStep2Modal, buildMinimalDebugModal } = require('./overrideModal');
+const cache = require('./cache/redisClient');
 
 // Import database repositories
 const { UsersRepository, OverridesRepository } = require('./db/repository');
@@ -140,6 +141,8 @@ async function addOverrideRequest(overrideData) {
 
   try {
     await OverridesRepository.addOverride(overrideData, overrideData.requestedBy);
+    await cache.del('overrides:all');
+    await cache.del(`sprintUsers:${overrideData.sprintIndex}`);
     
     // Dual-write to JSON if enabled
     if (DUAL_WRITE_MODE) {
@@ -190,6 +193,8 @@ async function approveOverride(sprintIndex, role, requestedBy, replacementSlackI
     const result = await OverridesRepository.approveOverride(
       sprintIndex, role, requestedBy, replacementSlackId, approvedBy
     );
+    await cache.del('overrides:all');
+    await cache.del(`sprintUsers:${sprintIndex}`);
     
     // Dual-write to JSON if enabled
     if (DUAL_WRITE_MODE && result) {
@@ -252,6 +257,8 @@ async function declineOverride(sprintIndex, role, requestedBy, replacementSlackI
     const result = await OverridesRepository.declineOverride(
       sprintIndex, role, requestedBy, replacementSlackId, declinedBy
     );
+    await cache.del('overrides:all');
+    await cache.del(`sprintUsers:${sprintIndex}`);
     
     // Dual-write to JSON if enabled
     if (DUAL_WRITE_MODE) {
@@ -835,6 +842,8 @@ slackApp.action('admin_remove_override', async ({ ack, body, client, logger }) =
           removed.newSlackId,
           body.user.id
         );
+        await cache.del('overrides:all');
+        await cache.del(`sprintUsers:${removed.sprintIndex}`);
       } catch (error) {
         console.error('[admin_remove_override] Database error:', error);
         // Fallback to JSON removal

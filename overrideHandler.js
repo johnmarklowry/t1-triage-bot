@@ -465,15 +465,18 @@ slackApp.action('sprint_select', async ({ ack, body, client, logger }) => {
  * Returns up to 100 role-filtered user options (excluding requester).
  */
 slackApp.options('replacement_select', async ({ ack, body, payload, logger }) => {
+  const t0 = Date.now();
   try {
     const query = (payload?.value || body?.value || '').toString().trim().toLowerCase();
     const view = body?.view;
 
     let metadata = {};
+    let metadataParseOk = true;
     try {
       metadata = JSON.parse(view?.private_metadata || '{}');
     } catch {
       metadata = {};
+      metadataParseOk = false;
     }
 
     const requesterSlackId = metadata.requester || body?.user?.id;
@@ -483,6 +486,23 @@ slackApp.options('replacement_select', async ({ ack, body, payload, logger }) =>
     }
 
     if (!role) {
+      // Low-noise logging: only log “no role” when the user opens the dropdown (queryLen 0)
+      // or when parsing metadata failed (helps diagnose HTTP-mode routing/config issues).
+      if (query.length === 0 || metadataParseOk === false) {
+        try {
+          logger?.warn?.('[replacement_select] no role; returning empty options', {
+            viewType: view?.type || null,
+            callbackId: view?.callback_id || null,
+            metadataParseOk,
+            hasRoleInMetadata: !!metadata?.role,
+            hasRequesterInMetadata: !!metadata?.requester,
+            queryLen: query.length,
+            useDatabaseEnv: process.env.USE_DATABASE ?? null,
+            databaseUrlSet: !!process.env.DATABASE_URL,
+            elapsedMs: Date.now() - t0
+          });
+        } catch {}
+      }
       await ack({ options: [] });
       return;
     }
@@ -508,6 +528,22 @@ slackApp.options('replacement_select', async ({ ack, body, payload, logger }) =>
         };
       });
 
+    // Low-noise logging: log only when opening the dropdown (queryLen 0) OR when returned 0.
+    // This is enough to diagnose “No result” without spamming logs for every keystroke.
+    if (query.length === 0 || matches.length === 0) {
+      try {
+        logger?.info?.('[replacement_select] served options', {
+          role,
+          roleListLength: roleList.length,
+          returned: matches.length,
+          queryLen: query.length,
+          useDatabaseEnv: process.env.USE_DATABASE ?? null,
+          databaseUrlSet: !!process.env.DATABASE_URL,
+          elapsedMs: Date.now() - t0
+        });
+      } catch {}
+    }
+
     if (typeof logger?.info === 'function') {
       logger.info('[overrideHandler] Replacement options served', {
         role,
@@ -519,6 +555,15 @@ slackApp.options('replacement_select', async ({ ack, body, payload, logger }) =>
 
     await ack({ options: matches });
   } catch (error) {
+    try {
+      logger?.error?.('[replacement_select] error', {
+        error: error?.data?.error || error?.message || String(error),
+        responseMessages: error?.data?.response_metadata?.messages || null,
+        useDatabaseEnv: process.env.USE_DATABASE ?? null,
+        databaseUrlSet: !!process.env.DATABASE_URL,
+        elapsedMs: Date.now() - t0
+      });
+    } catch {}
     logger.error('[overrideHandler] Error serving replacement options:', error, {
       errorMessage: error.message,
       errorCode: error.code,

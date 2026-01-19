@@ -17,6 +17,10 @@ const {
   loadJSON,
   getSprintUsers,
   refreshCurrentState,
+  parsePTDate,
+  getTodayPT,
+  formatSprintRangePT,
+  formatSprintLabelPT,
   OVERRIDES_FILE
 } = require('./dataUtils');
 
@@ -106,10 +110,10 @@ async function getCurrentOnCall() {
     if (!currentState || currentState.sprintIndex === null || !sprints || sprints.length === 0) {
       return null;
     }
-    
-    const curSprint = sprints[currentState.sprintIndex];
+
+    const curSprint = sprints.find(s => Number(s?.sprintIndex) === Number(currentState.sprintIndex));
     if (!curSprint) {
-      console.error('[getCurrentOnCall] Sprint not found for index:', currentState.sprintIndex);
+      console.error('[getCurrentOnCall] Sprint not found for sprintIndex:', currentState.sprintIndex);
       return null;
     }
     
@@ -162,20 +166,19 @@ async function getNextOnCall() {
     if (!currentState || currentState.sprintIndex === null) {
       return null;
     }
-  
-    const nextIndex = currentState.sprintIndex + 1;
-    if (!sprints || nextIndex >= sprints.length) {
-      return null;
-    }
-  
-    const nextSprint = sprints[nextIndex];
+
+    const sorted = (Array.isArray(sprints) ? sprints.slice() : [])
+      .sort((a, b) => Number(a?.sprintIndex ?? 0) - Number(b?.sprintIndex ?? 0));
+
+    const currentIdx = Number(currentState.sprintIndex);
+    const nextSprint = sorted.find(s => Number(s?.sprintIndex) > currentIdx) || null;
     if (!nextSprint) {
-      console.warn('[getNextOnCall] Next sprint not found for index:', nextIndex);
+      console.warn('[getNextOnCall] Next sprint not found after sprintIndex:', currentState.sprintIndex);
       return null;
     }
   
     // Use centralized function to get users for the next sprint
-    const sprintUsers = await getSprintUsers(nextIndex);
+    const sprintUsers = await getSprintUsers(nextSprint.sprintIndex);
   
     let users = [];
     for (let role of ["account", "producer", "po", "uiEng", "beEng"]) {
@@ -194,7 +197,7 @@ async function getNextOnCall() {
     }
   
     return {
-      sprintIndex: nextIndex,
+      sprintIndex: nextSprint.sprintIndex,
       sprintName: nextSprint.sprintName,
       startDate: nextSprint.startDate,
       endDate: nextSprint.endDate,
@@ -272,7 +275,9 @@ function buildContextBlock(text) {
  * @returns {string} Formatted time remaining (e.g., "2 days, 5 hours remaining" or "Ends today")
  */
 function formatTimeRemaining(endDate) {
-  const end = dayjs(`${endDate}T23:59:59-07:00`).tz("America/Los_Angeles");
+  const endStart = parsePTDate(endDate);
+  if (!endStart) return "Ended";
+  const end = endStart.endOf('day');
   const now = dayjs().tz("America/Los_Angeles");
   const diff = end.diff(now);
   
@@ -301,8 +306,9 @@ function formatTimeRemaining(endDate) {
  * @returns {string} Formatted days until (e.g., "In 3 days" or "Starts tomorrow")
  */
 function formatDaysUntil(startDate) {
-  const start = dayjs(`${startDate}T00:00:00-07:00`).tz("America/Los_Angeles");
-  const now = dayjs().tz("America/Los_Angeles");
+  const start = parsePTDate(startDate);
+  if (!start) return "Starts";
+  const now = getTodayPT();
   const days = start.diff(now, 'day');
   
   if (days < 0) {
@@ -339,6 +345,7 @@ function getUserOnCallStatus(userId, currentRotation) {
     timeRemaining: formatTimeRemaining(currentRotation.endDate),
     sprintIndex: currentRotation.sprintIndex,
     sprintName: currentRotation.sprintName,
+    startDate: currentRotation.startDate,
     endDate: currentRotation.endDate
   };
 }
@@ -504,15 +511,14 @@ function buildCompactRotationCard(rotation, highlightUserId = null) {
   }
   
   const blocks = [];
-  const startFormatted = dayjs(`${rotation.startDate}T00:00:00-07:00`).format("MMM D");
-  const endFormatted = dayjs(`${rotation.endDate}T00:00:00-07:00`).format("MMM D");
+  const rangeText = formatSprintRangePT(rotation.startDate, rotation.endDate);
   
   // Header with sprint info
   blocks.push({
     type: 'section',
     text: {
       type: 'mrkdwn',
-      text: `*${rotation.sprintName}* • ${startFormatted} - ${endFormatted}`
+      text: `*${rotation.sprintName}* • ${rangeText}`
     }
   });
   
@@ -561,14 +567,13 @@ function buildCurrentRotationBlocks(cur, highlightUserId = null) {
   blocks.push(buildHeaderBlock('Currently On Call'));
   
   // Add context about the active sprint
-  const startFormatted = dayjs(`${cur.startDate}T00:00:00-07:00`).format("MMM D, YYYY");
-  const endFormatted = dayjs(`${cur.endDate}T00:00:00-07:00`).format("MMM D, YYYY");
+  const rangeText = formatSprintRangePT(cur.startDate, cur.endDate);
   
   blocks.push({
     type: 'section',
     text: {
       type: 'mrkdwn',
-      text: `*${cur.sprintName}*\n${startFormatted} - ${endFormatted} • ${formatTimeRemaining(cur.endDate)}`
+      text: `*${cur.sprintName}* • ${rangeText}\n${formatTimeRemaining(cur.endDate)}`
     }
   });
   
@@ -604,7 +609,9 @@ function buildCurrentRotationBlocks(cur, highlightUserId = null) {
  * @param {Array<Object>} nxt.users - Array of user objects with role, name, and slackId
  * @returns {Array<Object>} Array of Slack Block Kit blocks (header, section with fields, context, user sections)
  */
-function buildNextRotationBlocks(nxt, highlightUserId = null) {
+// NOTE: Compact next-rotation rendering retained for reference, but not used.
+// The canonical Next Rotation section uses buildNextRotationBlocks() below to avoid drift.
+function buildNextRotationBlocksCompact(nxt, highlightUserId = null) {
   if (!nxt) {
     return [
       {
@@ -641,11 +648,12 @@ function buildPersonalStatusCard(userId, onCallStatus, nextShift) {
   
   if (onCallStatus) {
     // User is currently on call
+    const rangeText = formatSprintRangePT(onCallStatus.startDate || null, onCallStatus.endDate);
     blocks.push({
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `*You are currently on call*\n*Role:* ${onCallStatus.roleDisplay} | *Sprint:* ${onCallStatus.sprintName}\n*Time remaining:* ${onCallStatus.timeRemaining}`
+        text: `*You are currently on call*\n*Sprint:* ${onCallStatus.sprintName}\n*Dates:* ${rangeText}\n*Time remaining:* ${onCallStatus.timeRemaining}`
       },
       accessory: {
         type: 'button',
@@ -657,11 +665,12 @@ function buildPersonalStatusCard(userId, onCallStatus, nextShift) {
     });
   } else if (nextShift) {
     // User has upcoming shift
+    const rangeText = formatSprintRangePT(nextShift.startDate, nextShift.endDate);
     blocks.push({
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `*Your next shift*\n*Role:* ${nextShift.roleDisplay} | *Sprint:* ${nextShift.sprintName}\n*${nextShift.daysUntil}* • ${dayjs(`${nextShift.startDate}T00:00:00-07:00`).format("MMM D")} - ${dayjs(`${nextShift.endDate}T00:00:00-07:00`).format("MMM D")}`
+        text: `*Your next shift*\n*Sprint:* ${nextShift.sprintName}\n*Dates:* ${rangeText}\n*${nextShift.daysUntil}*`
       },
       accessory: {
         type: 'button',
@@ -706,8 +715,7 @@ function buildUserUpcomingShiftsBlocks(upcomingShifts, userId) {
   ];
   
   upcomingShifts.forEach((shift, idx) => {
-    const startFormatted = dayjs(`${shift.startDate}T00:00:00-07:00`).format("MMM D");
-    const endFormatted = dayjs(`${shift.endDate}T00:00:00-07:00`).format("MMM D");
+    const rangeText = formatSprintRangePT(shift.startDate, shift.endDate);
 
     const teamText = shift.rotationText
       ? `\n\n*Team on rotation*\n${shift.rotationText}`
@@ -717,7 +725,7 @@ function buildUserUpcomingShiftsBlocks(upcomingShifts, userId) {
       type: 'section',
       text: {
         type: 'mrkdwn',
-          text: `*${shift.sprintName}*\n${shift.roleDisplay} • ${startFormatted} - ${endFormatted} • ${shift.daysUntil}${teamText}`
+          text: `*${shift.sprintName}* • ${rangeText}\n${shift.daysUntil}${teamText}`
       },
       accessory: {
         type: 'button',
@@ -1021,12 +1029,10 @@ async function buildHomeView(current, next, disciplines, userId = null, onCallSt
 function formatCurrentText(cur) {
   if (!cur) return '_No active sprint found._';
   
-  // Format dates properly by adding T00:00:00 to ensure they're interpreted as midnight PT
-  const startFormatted = dayjs(`${cur.startDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
-  const endFormatted = dayjs(`${cur.endDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
+  const rangeText = formatSprintRangePT(cur.startDate, cur.endDate);
   
   let text = '*Current On-Call Rotation*\n';
-  text += `*${cur.sprintName}*\nDates: ${startFormatted} to ${endFormatted}\n\n`;
+  text += `*${cur.sprintName}* • ${rangeText}\n\n`;
   
   // Sort users by role order for consistent display
   const roleOrder = ['account', 'producer', 'po', 'uiEng', 'beEng'];
@@ -1062,16 +1068,14 @@ function buildLegacyCurrentRotationSection(cur, highlightUserId = null) {
     ];
   }
 
-  const startFormatted = dayjs(`${cur.startDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
-  const endFormatted = dayjs(`${cur.endDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
+  const rangeText = formatSprintRangePT(cur.startDate, cur.endDate);
 
   const roleOrder = ['account', 'producer', 'po', 'uiEng', 'beEng'];
   const sortedUsers = [...cur.users].sort((a, b) => roleOrder.indexOf(a.role) - roleOrder.indexOf(b.role));
 
   const lines = [];
   lines.push('*Current On-Call Rotation*');
-  lines.push(cur.sprintName);
-  lines.push(`Dates: ${startFormatted} to ${endFormatted}`);
+  lines.push(`*${cur.sprintName}* • ${rangeText}`);
   lines.push('');
 
   sortedUsers.forEach(u => {
@@ -1107,12 +1111,10 @@ function buildLegacyCurrentRotationSection(cur, highlightUserId = null) {
 function formatNextText(nxt) {
   if (!nxt) return '_No upcoming sprint scheduled._';
   
-  // Format dates properly by adding T00:00:00 to ensure they're interpreted as midnight PT
-  const startFormatted = dayjs(`${nxt.startDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
-  const endFormatted = dayjs(`${nxt.endDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
+  const rangeText = formatSprintRangePT(nxt.startDate, nxt.endDate);
   
   let text = '*Next On-Call Rotation*\n';
-  text += `*${nxt.sprintName}*\nDates: ${startFormatted} to ${endFormatted}\n\n`;
+  text += `*${nxt.sprintName}* • ${rangeText}\n\n`;
   
   // Sort users by role order for consistent display
   const roleOrder = ['account', 'producer', 'po', 'uiEng', 'beEng'];
@@ -1135,7 +1137,7 @@ function formatNextText(nxt) {
  * @param {Object} nxt - Next rotation data with sprintName, startDate, endDate, and users array
  * @returns {Array<Object>} Array of Slack Block Kit blocks
  */
-function buildNextRotationBlocks(nxt) {
+function buildNextRotationBlocks(nxt, highlightUserId = null) {
   if (!nxt) {
     return [
       {
@@ -1145,58 +1147,29 @@ function buildNextRotationBlocks(nxt) {
     ];
   }
 
-  const blocks = [];
-  
-  // Block Kit Best Practice: Use header blocks for section titles (visual hierarchy)
-  blocks.push(buildHeaderBlock('Next On-Call Rotation'));
-  
-  // Block Kit Best Practice: Use section blocks with fields array for compact side-by-side display
-  // Format dates consistently using Pacific Time timezone
-  const startFormatted = dayjs(`${nxt.startDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
-  const endFormatted = dayjs(`${nxt.endDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
-  
-  blocks.push({
-    type: 'section',
-    fields: [
-      {
-        type: 'mrkdwn',
-        text: `*Sprint:*\n${nxt.sprintName}` // Bold label for accessibility
-      },
-      {
-        type: 'mrkdwn',
-        text: `*Start Date:*\n${startFormatted}` // Bold label for accessibility
-      },
-      {
-        type: 'mrkdwn',
-        text: `*End Date:*\n${endFormatted}` // Bold label for accessibility
-      }
-    ]
-  });
-  
-  // Block Kit Best Practice: Use context blocks for secondary metadata (dates, timestamps)
-  blocks.push(buildContextBlock(`${startFormatted} to ${endFormatted}`));
-  
-  // Block Kit Best Practice: Individual section blocks for each user role (clear separation)
-  // Sort users by role order for consistent display
+  const rangeText = formatSprintRangePT(nxt.startDate, nxt.endDate);
+
   const roleOrder = ['account', 'producer', 'po', 'uiEng', 'beEng'];
-  const sortedUsers = nxt.users.sort((a, b) => {
-    return roleOrder.indexOf(a.role) - roleOrder.indexOf(b.role);
-  });
-  
-  // Accessibility: Each block includes descriptive text (role name + user name + mention)
-  // Not just emoji or icons - screen readers can understand the content
+  const sortedUsers = (Array.isArray(nxt.users) ? nxt.users.slice() : [])
+    .sort((a, b) => roleOrder.indexOf(a.role) - roleOrder.indexOf(b.role));
+
+  const lines = [];
+  lines.push('*Next On-Call Rotation*');
+  lines.push(`*${nxt.sprintName}* • ${rangeText}`);
+  lines.push('');
+
   sortedUsers.forEach(u => {
     const displayRole = ROLE_DISPLAY[u.role] || u.role;
-    blocks.push({
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: `*${displayRole}:* ${u.name} (<@${u.slackId}>)` // Bold role, name, and mention
-      }
-    });
+    const suffix = highlightUserId && u.slackId === highlightUserId ? ' (you)' : '';
+    lines.push(`${displayRole}: ${u.name} (<@${u.slackId}>)${suffix}`);
   });
-  
-  return blocks;
+
+  return [
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: lines.join('\n') }
+    }
+  ];
 }
 
 /**
@@ -1358,9 +1331,7 @@ async function buildUpcomingSprintsModal(options = {}) {
     for (let i = 0; i < sprintsToShow.length; i++) {
       const sprint = sprintsToShow[i];
       const actualIndex = startingIndex + i;
-      // Format dates properly by adding T00:00:00 to ensure they're interpreted as midnight PT
-      const startFormatted = dayjs(`${sprint.startDate}T00:00:00-07:00`).format('ddd MM/DD/YYYY');
-      const endFormatted = dayjs(`${sprint.endDate}T00:00:00-07:00`).format("ddd MM/DD/YYYY");
+      const rangeText = formatSprintRangePT(sprint.startDate, sprint.endDate);
       
       let rotationText = "";
       const sprintUsers = await getSprintUsers(actualIndex);
@@ -1381,7 +1352,7 @@ async function buildUpcomingSprintsModal(options = {}) {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*${sprint.sprintName}*\nDates: ${startFormatted} to ${endFormatted}\n${rotationText}`
+          text: `*${sprint.sprintName}* • ${rangeText}\n${rotationText}`
         }
       });
       blocks.push({ type: "divider" });
@@ -1720,6 +1691,8 @@ slackApp.action('request_coverage_from_home', async ({ ack, body, client, logger
       callbackId: 'override_minimal_probe'
     });
 
+    const isFromModal = !!body?.view?.id;
+
     const tryOpen = async (viewToOpen, attemptLabel) => {
       const args = interactivityPointer
         ? { interactivity_pointer: interactivityPointer, view: viewToOpen }
@@ -1727,11 +1700,18 @@ slackApp.action('request_coverage_from_home', async ({ ack, body, client, logger
       return await client.views.open(args);
     };
 
+    const tryPush = async (viewToPush, attemptLabel) => {
+      // Interactivity pointer isn’t compatible with views.push; only use trigger_id.
+      // When a button is clicked inside a modal, Slack expects views.push to stack the next modal.
+      return await client.views.push({ trigger_id: triggerId, view: viewToPush });
+    };
+
     // Open a minimal probe modal first, then update to the real view.
     // This helps distinguish trigger-id issues from view-shape issues and can improve reliability.
     let openResult;
     try {
-      openResult = await tryOpen(minimalView, 'probe_first');
+      // If invoked from within a modal, push on top of that modal.
+      openResult = isFromModal ? await tryPush(minimalView, 'probe_first') : await tryOpen(minimalView, 'probe_first');
     } catch (openErr) {
       throw openErr;
     }
@@ -1834,8 +1814,7 @@ slackApp.action('view_my_schedule', async ({ ack, body, client, logger }) => {
       });
     } else {
       shiftsToShow.forEach((shift) => {
-        const startFormatted = dayjs(`${shift.startDate}T00:00:00-07:00`).format("ddd, MMM D, YYYY");
-        const endFormatted = dayjs(`${shift.endDate}T00:00:00-07:00`).format("ddd, MMM D, YYYY");
+        const rangeText = formatSprintRangePT(shift.startDate, shift.endDate);
 
         const teamText = shift.rotationText
           ? `\n\n*Team on rotation*\n${shift.rotationText}`
@@ -1845,7 +1824,7 @@ slackApp.action('view_my_schedule', async ({ ack, body, client, logger }) => {
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `*${shift.sprintName}*\n*Your role:* ${shift.roleDisplay}\n${startFormatted} - ${endFormatted}\n${shift.daysUntil}${teamText}`
+            text: `*${shift.sprintName}* • ${rangeText}\n${shift.daysUntil}${teamText}`
           },
           accessory: {
             type: 'button',
@@ -1974,8 +1953,7 @@ slackApp.action('load_more_my_schedule', async ({ ack, body, client, logger }) =
       });
     } else {
       shiftsToShow.forEach((shift) => {
-        const startFormatted = dayjs(`${shift.startDate}T00:00:00-07:00`).format("ddd, MMM D, YYYY");
-        const endFormatted = dayjs(`${shift.endDate}T00:00:00-07:00`).format("ddd, MMM D, YYYY");
+        const rangeText = formatSprintRangePT(shift.startDate, shift.endDate);
 
         const teamText = shift.rotationText
           ? `\n\n*Team on rotation*\n${shift.rotationText}`
@@ -1985,7 +1963,7 @@ slackApp.action('load_more_my_schedule', async ({ ack, body, client, logger }) =
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `*${shift.sprintName}*\n*Your role:* ${shift.roleDisplay}\n${startFormatted} - ${endFormatted}\n${shift.daysUntil}${teamText}`
+            text: `*${shift.sprintName}* • ${rangeText}\n${shift.daysUntil}${teamText}`
           },
           accessory: {
             type: 'button',

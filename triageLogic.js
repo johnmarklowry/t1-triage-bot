@@ -37,8 +37,15 @@ const FALLBACK_USERS = {
 };
 
 // Initialize currentState from file at startup
-let currentState = readCurrentState();
-console.log("[INIT] Loaded current state:", currentState);
+let currentState = {
+  sprintIndex: null,
+  account: null,
+  producer: null,
+  po: null,
+  uiEng: null,
+  beEng: null
+};
+console.log("[INIT] Current state initialized (lazy-loaded from DB/JSON when needed)");
 
 /* ======================================
    Utility Functions: Sprints & Users
@@ -184,13 +191,16 @@ async function run5pmCheck() {
 async function run8amCheck() {
   try {
     console.log("[8AM] Starting 8AM check");
+
+    // Always load the latest persisted current state (DB/JSON) at the start of a run.
+    currentState = await readCurrentState();
     
     // First, refresh current state to ensure consistency
-    const stateUpdated = refreshCurrentState();
+    const stateUpdated = await refreshCurrentState();
     if (stateUpdated) {
       console.log("[8AM] State was refreshed due to inconsistencies");
       // Reload the current state after refresh
-      currentState = readCurrentState();
+      currentState = await readCurrentState();
     }
     
     const currentSprint = await findCurrentSprint();
@@ -248,7 +258,7 @@ async function run8amCheck() {
         sprintIndex: currentSprint.index,
         ...newRoles,
       };
-      saveCurrentState(currentState);
+      await saveCurrentState(currentState);
 
       console.log(`[8AM] Transitioned from sprint ${oldIndex} to ${currentSprint.index}.`);
     } else {
@@ -300,7 +310,7 @@ async function run8amCheck() {
           sprintIndex: oldIndex,
           ...newRoles,
         };
-        saveCurrentState(currentState);
+        await saveCurrentState(currentState);
       } else {
         console.log("[8AM] No mid-cycle changes detected.");
       }
@@ -328,7 +338,7 @@ async function setCurrentSprintState(sprintIndex) {
     await updateOnCallUserGroup(userArray);
     await updateChannelTopic(userArray);
     
-    saveCurrentState(currentState);
+    await saveCurrentState(currentState);
     console.log(`[setCurrentSprintState] State set for sprint index ${sprintIndex}.`, currentState);
   } catch (err) {
     console.error("[setCurrentSprintState] Error:", err);
@@ -388,7 +398,7 @@ async function runImmediateRotation() {
       sprintIndex: currentSprint.index,
       ...newRoles,
     };
-    saveCurrentState(currentState);
+    await saveCurrentState(currentState);
     console.log("[Immediate Rotation] Updated to sprint index:", currentSprint.index, currentState);
   } catch (err) {
     console.error("[Immediate Rotation] Error:", err);
@@ -477,7 +487,7 @@ async function forceSprintTransition(newSprintIndex, mockNotifications = true) {
       sprintIndex: newSprintIndex,
       ...newRoles,
     };
-    saveCurrentState(currentState);
+    await saveCurrentState(currentState);
     
     console.log(`[forceSprintTransition] Completed transition from ${oldIndex} to ${newSprintIndex}`);
     

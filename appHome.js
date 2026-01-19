@@ -1691,7 +1691,11 @@ slackApp.action('request_coverage_from_home', async ({ ack, body, client, logger
       callbackId: 'override_minimal_probe'
     });
 
-    const isFromModal = !!body?.view?.id;
+    // Slack sends `body.view` for multiple surfaces (including App Home where `view.type === 'home'`).
+    // Only use views.push when the root view is a modal; otherwise views.push fails with:
+    // "must match the `type` of the root view whose stack we're pushing onto [json-pointer:/view/type]"
+    const viewType = body?.view?.type || null;
+    const isFromModal = viewType === 'modal';
 
     const tryOpen = async (viewToOpen, attemptLabel) => {
       const args = interactivityPointer

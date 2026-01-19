@@ -76,6 +76,7 @@ const UsersRepository = {
     const result = await query(`
       SELECT discipline, slack_id, name
       FROM users
+      WHERE active = TRUE
       ORDER BY discipline, name
     `);
     
@@ -101,6 +102,7 @@ const UsersRepository = {
       SELECT slack_id, name
       FROM users
       WHERE discipline = $1
+        AND active = TRUE
       ORDER BY name
     `, [discipline]);
     
@@ -111,17 +113,36 @@ const UsersRepository = {
   },
 
   /**
+   * Get users for a specific discipline, including inactive (for admin screens).
+   */
+  async getUsersByDisciplineIncludingInactive(discipline) {
+    const result = await query(`
+      SELECT slack_id, name, active
+      FROM users
+      WHERE discipline = $1
+      ORDER BY active DESC, name
+    `, [discipline]);
+
+    return result.rows.map(row => ({
+      slackId: row.slack_id,
+      name: row.name,
+      active: row.active === true
+    }));
+  },
+
+  /**
    * Add a user to a discipline using upsert
    */
   async addUser(slackId, name, discipline, changedBy = 'system') {
     return await withRetry(async () => {
       return await transaction(async (client) => {
         const result = await client.query(`
-          INSERT INTO users (slack_id, name, discipline)
-          VALUES ($1, $2, $3)
+          INSERT INTO users (slack_id, name, discipline, active)
+          VALUES ($1, $2, $3, TRUE)
           ON CONFLICT (slack_id, discipline) 
           DO UPDATE SET 
             name = EXCLUDED.name,
+            active = TRUE,
             updated_at = CURRENT_TIMESTAMP
           RETURNING id
         `, [slackId, name, discipline]);
@@ -137,6 +158,134 @@ const UsersRepository = {
         return userId;
       });
     }, 3, `Add user ${slackId} to ${discipline}`);
+  },
+
+  /**
+   * Get all users (including inactive) for admin management views.
+   */
+  async getAllUsers() {
+    const result = await query(`
+      SELECT slack_id, name, discipline, active
+      FROM users
+      ORDER BY active DESC, discipline, name
+    `);
+
+    return result.rows.map(row => ({
+      slackId: row.slack_id,
+      name: row.name,
+      discipline: row.discipline,
+      active: row.active === true
+    }));
+  },
+
+  /**
+   * Deactivate a user across all disciplines (kept in DB, excluded from rotations).
+   */
+  async deactivateUser(slackId, changedBy = 'system', reason = 'User deactivated (removed from rotations)') {
+    return await transaction(async (client) => {
+      const oldRows = await client.query(`SELECT * FROM users WHERE slack_id = $1`, [slackId]);
+      if (oldRows.rows.length === 0) return false;
+
+      await client.query(`UPDATE users SET active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE slack_id = $1`, [slackId]);
+
+      // Audit each affected row (one per discipline record)
+      for (const r of oldRows.rows) {
+        await logAudit('users', r.id, 'UPDATE', {
+          slack_id: r.slack_id,
+          name: r.name,
+          discipline: r.discipline,
+          active: r.active
+        }, {
+          slack_id: r.slack_id,
+          name: r.name,
+          discipline: r.discipline,
+          active: false
+        }, changedBy, reason);
+      }
+      return true;
+    });
+  },
+
+  /**
+   * Reactivate a user across all disciplines (included in rotations).
+   */
+  async reactivateUser(slackId, changedBy = 'system', reason = 'User reactivated (included in rotations)') {
+    return await transaction(async (client) => {
+      const oldRows = await client.query(`SELECT * FROM users WHERE slack_id = $1`, [slackId]);
+      if (oldRows.rows.length === 0) return false;
+
+      await client.query(`UPDATE users SET active = TRUE, updated_at = CURRENT_TIMESTAMP WHERE slack_id = $1`, [slackId]);
+
+      for (const r of oldRows.rows) {
+        await logAudit('users', r.id, 'UPDATE', {
+          slack_id: r.slack_id,
+          name: r.name,
+          discipline: r.discipline,
+          active: r.active
+        }, {
+          slack_id: r.slack_id,
+          name: r.name,
+          discipline: r.discipline,
+          active: true
+        }, changedBy, reason);
+      }
+      return true;
+    });
+  },
+
+  /**
+   * Update a user's display name across all discipline records.
+   */
+  async updateUserName(slackId, name, changedBy = 'system') {
+    return await transaction(async (client) => {
+      const oldRows = await client.query(`SELECT * FROM users WHERE slack_id = $1`, [slackId]);
+      if (oldRows.rows.length === 0) return false;
+
+      await client.query(`UPDATE users SET name = $2, updated_at = CURRENT_TIMESTAMP WHERE slack_id = $1`, [slackId, name]);
+
+      for (const r of oldRows.rows) {
+        await logAudit('users', r.id, 'UPDATE', {
+          slack_id: r.slack_id,
+          name: r.name,
+          discipline: r.discipline,
+          active: r.active
+        }, {
+          slack_id: r.slack_id,
+          name,
+          discipline: r.discipline,
+          active: r.active
+        }, changedBy, 'User name updated');
+      }
+      return true;
+    });
+  },
+
+  /**
+   * Move a user's discipline (DB model stores discipline on the user record).
+   * If duplicates exist (multiple discipline rows), we move all to the target discipline.
+   */
+  async moveUserDiscipline(slackId, toDiscipline, changedBy = 'system') {
+    return await transaction(async (client) => {
+      const oldRows = await client.query(`SELECT * FROM users WHERE slack_id = $1`, [slackId]);
+      if (oldRows.rows.length === 0) return false;
+
+      await client.query(`UPDATE users SET discipline = $2, updated_at = CURRENT_TIMESTAMP WHERE slack_id = $1`, [slackId, toDiscipline]);
+
+      for (const r of oldRows.rows) {
+        await logAudit('users', r.id, 'UPDATE', {
+          slack_id: r.slack_id,
+          name: r.name,
+          discipline: r.discipline,
+          active: r.active
+        }, {
+          slack_id: r.slack_id,
+          name: r.name,
+          discipline: toDiscipline,
+          active: r.active
+        }, changedBy, 'User discipline updated');
+      }
+      return true;
+    });
   },
 
   /**
@@ -242,7 +391,7 @@ const SprintsRepository = {
   /**
    * Add a sprint using upsert
    */
-  async addSprint(sprintName, startDate, endDate, sprintIndex, changedBy = 'system') {
+  async addSprint(sprintName, startDate, endDate, sprintIndex, changedBy = 'system', reason = 'Sprint added/updated') {
     return await withRetry(async () => {
       return await transaction(async (client) => {
         const result = await client.query(`
@@ -264,7 +413,7 @@ const SprintsRepository = {
           start_date: startDate,
           end_date: endDate,
           sprint_index: sprintIndex
-        }, changedBy, 'Sprint added/updated');
+        }, changedBy, reason || 'Sprint added/updated');
         
         return sprintId;
       });
@@ -478,11 +627,62 @@ const OverridesRepository = {
   }
 };
 
+/**
+ * Admin channel membership cache repository (App Home performance).
+ *
+ * Stores whether a user is a member of the configured admin channel at a point in time.
+ * Callers should apply their own TTL logic based on checkedAt.
+ */
+const AdminMembershipRepository = {
+  async get(slackId) {
+    const result = await query(
+      `
+        SELECT slack_id, is_member, checked_at
+        FROM admin_channel_membership
+        WHERE slack_id = $1
+      `,
+      [slackId]
+    );
+
+    if (!result.rows || result.rows.length === 0) return null;
+
+    const row = result.rows[0];
+    return {
+      slackId: row.slack_id,
+      isMember: row.is_member === true,
+      checkedAt: row.checked_at
+    };
+  },
+
+  async upsert(slackId, isMember, checkedAt = new Date()) {
+    return await withRetry(
+      async () => {
+        await query(
+          `
+            INSERT INTO admin_channel_membership (slack_id, is_member, checked_at)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (slack_id)
+            DO UPDATE SET
+              is_member = EXCLUDED.is_member,
+              checked_at = EXCLUDED.checked_at,
+              updated_at = CURRENT_TIMESTAMP
+          `,
+          [slackId, isMember === true, checkedAt]
+        );
+        return true;
+      },
+      3,
+      `AdminMembershipRepository.upsert(${slackId})`
+    );
+  }
+};
+
 module.exports = {
   UsersRepository,
   SprintsRepository,
   CurrentStateRepository,
   OverridesRepository,
+  AdminMembershipRepository,
   logAudit,
   withRetry,
   isRetryableError

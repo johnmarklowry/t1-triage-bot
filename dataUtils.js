@@ -139,7 +139,11 @@ async function readSprints() {
       console.error('[readSprints] Invalid sprints data: not an array');
       return [];
     }
-    return sprints;
+    // Ensure each sprint has a stable sprintIndex in JSON mode (defaults to array position).
+    return sprints.map((s, i) => ({
+      ...s,
+      sprintIndex: Number.isFinite(s?.sprintIndex) ? s.sprintIndex : i
+    }));
   }
 
   try {
@@ -161,7 +165,8 @@ async function readSprints() {
         return {
           sprintName: sprint.sprintName,
           startDate: formatDate(sprint.startDate),
-          endDate: formatDate(sprint.endDate)
+          endDate: formatDate(sprint.endDate),
+          sprintIndex: sprint.sprintIndex
         };
       });
     });
@@ -169,8 +174,61 @@ async function readSprints() {
     console.error('[readSprints] Database error:', error);
     // Fallback to JSON if database fails
     const sprints = loadJSON(SPRINTS_FILE);
-    return Array.isArray(sprints) ? sprints : [];
+    if (!Array.isArray(sprints)) return [];
+    return sprints.map((s, i) => ({
+      ...s,
+      sprintIndex: Number.isFinite(s?.sprintIndex) ? s.sprintIndex : i
+    }));
   }
+}
+
+/**
+ * Upsert a sprint (DB-first when available) and invalidate sprint caches.
+ * - Never deletes sprints (append + edit only).
+ * - In DB mode, updates are logged via audit_logs with the provided reason.
+ */
+async function upsertSprint({ sprintName, startDate, endDate, sprintIndex, changedBy = 'system', reason }) {
+  if (USE_DATABASE) {
+    try {
+      await SprintsRepository.addSprint(
+        sprintName,
+        startDate,
+        endDate,
+        sprintIndex,
+        changedBy,
+        reason || 'Sprint added/updated'
+      );
+
+      // Invalidate cached sprint list
+      await cache.del('sprints:all');
+
+      // Dual-write to JSON for backup/compatibility
+      if (DUAL_WRITE_MODE) {
+        const existing = loadJSON(SPRINTS_FILE);
+        const list = Array.isArray(existing) ? existing.slice() : [];
+        const idx = list.findIndex(s => Number.isFinite(s?.sprintIndex) && s.sprintIndex === sprintIndex);
+        const row = { sprintName, startDate, endDate, sprintIndex };
+        if (idx >= 0) list[idx] = row;
+        else list.push(row);
+        saveJSON(SPRINTS_FILE, list);
+      }
+
+      return true;
+    } catch (error) {
+      console.error('[upsertSprint] Database error, falling back to JSON:', error);
+      // Fall through to JSON write
+    }
+  }
+
+  // JSON-only mode (or DB fallback)
+  const existing = loadJSON(SPRINTS_FILE);
+  const list = Array.isArray(existing) ? existing.slice() : [];
+  const idx = list.findIndex(s => Number.isFinite(s?.sprintIndex) && s.sprintIndex === sprintIndex);
+  const row = { sprintName, startDate, endDate, sprintIndex };
+  if (idx >= 0) list[idx] = row;
+  else list.push(row);
+  saveJSON(SPRINTS_FILE, list);
+  return true;
 }
 
 /**
@@ -183,6 +241,12 @@ async function readDisciplines() {
       ? DISCIPLINES_STAGING_FILE
       : DISCIPLINES_FILE;
     const disciplines = loadJSON(sourceFile) || {};
+
+    // Filter out inactive users (kept in data for admin visibility, excluded from rotations)
+    for (const [discipline, users] of Object.entries(disciplines)) {
+      if (!Array.isArray(users)) continue;
+      disciplines[discipline] = users.filter(u => u?.active !== false);
+    }
     
     // Validate that no user appears in multiple disciplines
     const allUsers = new Map(); // userId -> discipline
@@ -657,6 +721,7 @@ module.exports = {
   getSprintUsers,
   getUpcomingSprints,
   refreshCurrentState,
+  upsertSprint,
   
   // File path constants
   CURRENT_STATE_FILE,

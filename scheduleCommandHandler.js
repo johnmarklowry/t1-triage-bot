@@ -207,13 +207,10 @@ slackApp.view('schedule_date_modal', async ({ ack, body, view, client, logger })
           title: { type: "plain_text", text: "Triage Schedule" },
           close: { type: "plain_text", text: "Close" },
           blocks: [
+            { type: "section", text: { type: "mrkdwn", text: "*Loading schedule…*" } },
             {
-              type: "header",
-              text: { type: "plain_text", text: "Loading schedule..." }
-            },
-            {
-              type: "section",
-              text: { type: "mrkdwn", text: `Fetching assignments for *${formatPTDate(selectedDate, 'MM/DD/YYYY')}*...` }
+              type: "context",
+              elements: [{ type: "mrkdwn", text: `Fetching assignments for *${formatPTDate(selectedDate, 'MM/DD/YYYY')}*…` }]
             }
           ]
         }

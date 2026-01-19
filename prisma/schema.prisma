@@ -106,6 +106,17 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+/// Cache of whether a user is a member of the configured admin channel (for fast App Home rendering)
+model AdminChannelMembership {
+  slackId   String    @id @map("slack_id") @db.VarChar(50)
+  isMember  Boolean   @map("is_member")
+  checkedAt DateTime  @map("checked_at") @db.Timestamp(6)
+  updatedAt DateTime? @default(now()) @map("updated_at") @db.Timestamp(6)
+
+  @@index([checkedAt], map: "idx_admin_channel_membership_checked_at")
+  @@map("admin_channel_membership")
+}
+
 /// Represents discipline definitions per environment
 model Discipline {
   id   String @id @default(cuid())

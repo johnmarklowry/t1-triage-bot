@@ -496,11 +496,57 @@ const OverridesRepository = {
   }
 };
 
+/**
+ * Admin channel membership cache repository (App Home performance).
+ */
+const AdminMembershipRepository = {
+  async get(slackId) {
+    return await withRetry(async () => {
+      const result = await query(
+        `
+          SELECT slack_id, is_member, checked_at
+          FROM admin_channel_membership
+          WHERE slack_id = $1
+        `,
+        [slackId]
+      );
+
+      if (!result.rows || result.rows.length === 0) return null;
+
+      const row = result.rows[0];
+      return {
+        slackId: row.slack_id,
+        isMember: row.is_member === true,
+        checkedAt: row.checked_at
+      };
+    }, 3, `AdminMembershipRepository.get(${slackId})`);
+  },
+
+  async upsert(slackId, isMember, checkedAt = new Date()) {
+    return await withRetry(async () => {
+      await query(
+        `
+          INSERT INTO admin_channel_membership (slack_id, is_member, checked_at)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (slack_id)
+          DO UPDATE SET
+            is_member = EXCLUDED.is_member,
+            checked_at = EXCLUDED.checked_at,
+            updated_at = CURRENT_TIMESTAMP
+        `,
+        [slackId, isMember === true, checkedAt]
+      );
+      return true;
+    }, 3, `AdminMembershipRepository.upsert(${slackId})`);
+  }
+};
+
 module.exports = {
   UsersRepository,
   SprintsRepository,
   CurrentStateRepository,
   OverridesRepository,
+  AdminMembershipRepository,
   logAudit,
   withRetry,
   isRetryableError

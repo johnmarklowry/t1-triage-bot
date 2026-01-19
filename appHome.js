@@ -20,6 +20,15 @@ const {
   OVERRIDES_FILE
 } = require('./dataUtils');
 
+// Admin membership cache helper (for conditional Admin CTA in App Home)
+const { AdminMembershipRepository } = require('./db/repository');
+const { DEFAULT_TTL_MS, isFresh, isUserInAdminChannel } = require('./services/adminMembership');
+const {
+  buildAdminUsersModalView,
+  buildAdminDisciplinesModalView,
+  buildAdminSprintsModalView
+} = require('./services/adminViews');
+
 // Import environment-specific command utilities
 const { getEnvironmentCommand } = require('./commandUtils');
 
@@ -899,7 +908,7 @@ function buildFallbackView(errorMessage = null, errorSource = null) {
  * @param {Array} upcomingShifts - User's upcoming shifts
  * @returns {Object} Slack Block Kit home view object
  */
-async function buildHomeView(current, next, disciplines, userId = null, onCallStatus = null, upcomingShifts = []) {
+async function buildHomeView(current, next, disciplines, userId = null, onCallStatus = null, upcomingShifts = [], isAdminUser = false) {
   // Build personal status card (hero section)
   const personalStatusBlocks = userId ? buildPersonalStatusCard(userId, onCallStatus, upcomingShifts[0] || null) : [];
   
@@ -946,6 +955,17 @@ async function buildHomeView(current, next, disciplines, userId = null, onCallSt
       type: 'button',
       text: { type: 'plain_text', text: 'View Rotation Lists' },
       action_id: 'view_discipline_lists'
+    });
+    quickActionsBlock.elements = quickActionsElements;
+  }
+
+  // Ensure Admin CTA is always last in the quick actions lane.
+  if (isAdminUser === true) {
+    const quickActionsElements = quickActionsBlock.elements || [];
+    quickActionsElements.push({
+      type: 'button',
+      text: { type: 'plain_text', text: 'Admin' },
+      action_id: 'open_admin_hub'
     });
     quickActionsBlock.elements = quickActionsElements;
   }
@@ -2155,6 +2175,177 @@ slackApp.action('view_discipline_lists', async ({ ack, body, client, logger }) =
   }
 });
 
+function buildAdminHubModalView() {
+  return {
+    type: 'modal',
+    callback_id: 'admin_hub_modal',
+    title: { type: 'plain_text', text: 'Admin' },
+    close: { type: 'plain_text', text: 'Close' },
+    blocks: [
+      { type: 'header', text: { type: 'plain_text', text: 'Admin Hub' } },
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: 'Quick links to admin tools.' }
+      },
+      { type: 'divider' },
+      {
+        type: 'actions',
+        elements: [
+          { type: 'button', text: { type: 'plain_text', text: 'Users' }, style: 'primary', action_id: 'admin_hub_open_users' },
+          { type: 'button', text: { type: 'plain_text', text: 'Disciplines' }, action_id: 'admin_hub_open_disciplines' },
+          { type: 'button', text: { type: 'plain_text', text: 'Sprints' }, action_id: 'admin_hub_open_sprints' }
+        ]
+      }
+    ]
+  };
+}
+
+function buildAdminHubNoAccessView() {
+  return {
+    type: 'modal',
+    title: { type: 'plain_text', text: 'Admin' },
+    close: { type: 'plain_text', text: 'Close' },
+    blocks: [
+      { type: 'section', text: { type: 'mrkdwn', text: ':no_entry: You do not have access to admin tools.' } },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: 'Access is granted by membership in the configured admin channel.' }] }
+    ]
+  };
+}
+
+/**
+ * Open the Admin Hub from App Home.
+ * This handler re-checks membership (cached + best-effort refresh) to prevent spoofing.
+ */
+slackApp.action('open_admin_hub', async ({ ack, body, client, logger }) => {
+  await ack();
+
+  const triggerId = body?.trigger_id;
+  const userId = body?.user?.id;
+  const adminChannelId = process.env.ADMIN_CHANNEL_ID;
+
+  if (!triggerId) return;
+  if (!adminChannelId || !userId) {
+    await client.views.open({
+      trigger_id: triggerId,
+      view: {
+        type: 'modal',
+        title: { type: 'plain_text', text: 'Admin' },
+        close: { type: 'plain_text', text: 'Close' },
+        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: ':warning: Admin channel not configured.' } }]
+      }
+    });
+    return;
+  }
+
+  const probeView = {
+    type: 'modal',
+    title: { type: 'plain_text', text: 'Admin' },
+    close: { type: 'plain_text', text: 'Close' },
+    blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'Checking access…' } }]
+  };
+
+  const opened = await client.views.open({ trigger_id: triggerId, view: probeView });
+
+  try {
+    const result = await isUserInAdminChannel({
+      client,
+      userId,
+      adminChannelId,
+      ttlMs: DEFAULT_TTL_MS,
+      logger
+    });
+
+    const view = result.isMember ? buildAdminHubModalView() : buildAdminHubNoAccessView();
+    await client.views.update({ view_id: opened.view.id, hash: opened.view.hash, view });
+  } catch (error) {
+    logger?.warn?.('[open_admin_hub] failed', { error: error.message });
+    await client.views.update({ view_id: opened.view.id, hash: opened.view.hash, view: buildAdminHubNoAccessView() });
+  }
+});
+
+async function ensureAdminAccess({ client, userId, logger }) {
+  const adminChannelId = process.env.ADMIN_CHANNEL_ID;
+  if (!adminChannelId || !userId) return false;
+
+  try {
+    const cached = await AdminMembershipRepository.get(userId);
+    if (cached && cached.isMember === true && isFresh(cached.checkedAt, DEFAULT_TTL_MS)) return true;
+  } catch {}
+
+  try {
+    const result = await isUserInAdminChannel({
+      client,
+      userId,
+      adminChannelId,
+      ttlMs: DEFAULT_TTL_MS,
+      logger
+    });
+    return result.isMember === true;
+  } catch {
+    return false;
+  }
+}
+
+slackApp.action('admin_hub_open_users', async ({ ack, body, client, logger }) => {
+  await ack();
+  const triggerId = body?.trigger_id;
+  const userId = body?.user?.id;
+
+  if (!triggerId) return;
+  if (!(await ensureAdminAccess({ client, userId, logger }))) return;
+
+  const view = await buildAdminUsersModalView();
+
+  try {
+    await client.views.push({ trigger_id: triggerId, view });
+  } catch (error) {
+    logger?.warn?.('[admin_hub_open_users] views.push failed, falling back to views.open', {
+      error: error?.data?.error || error?.message
+    });
+    await client.views.open({ trigger_id: triggerId, view });
+  }
+});
+
+slackApp.action('admin_hub_open_disciplines', async ({ ack, body, client, logger }) => {
+  await ack();
+  const triggerId = body?.trigger_id;
+  const userId = body?.user?.id;
+
+  if (!triggerId) return;
+  if (!(await ensureAdminAccess({ client, userId, logger }))) return;
+
+  const view = await buildAdminDisciplinesModalView({ discipline: 'account', showInactive: false });
+
+  try {
+    await client.views.push({ trigger_id: triggerId, view });
+  } catch (error) {
+    logger?.warn?.('[admin_hub_open_disciplines] views.push failed, falling back to views.open', {
+      error: error?.data?.error || error?.message
+    });
+    await client.views.open({ trigger_id: triggerId, view });
+  }
+});
+
+slackApp.action('admin_hub_open_sprints', async ({ ack, body, client, logger }) => {
+  await ack();
+  const triggerId = body?.trigger_id;
+  const userId = body?.user?.id;
+
+  if (!triggerId) return;
+  if (!(await ensureAdminAccess({ client, userId, logger }))) return;
+
+  const view = await buildAdminSprintsModalView({ page: 0, pageSize: 12 });
+
+  try {
+    await client.views.push({ trigger_id: triggerId, view });
+  } catch (error) {
+    logger?.warn?.('[admin_hub_open_sprints] views.push failed, falling back to views.open', {
+      error: error?.data?.error || error?.message
+    });
+    await client.views.open({ trigger_id: triggerId, view });
+  }
+});
+
 /**
  * Helper function to format disciplines as plain text for fallback
  */
@@ -2198,6 +2389,8 @@ slackApp.event('app_home_opened', async ({ event, client, logger }) => {
   let disciplines = null;
   let dataLoadErrors = [];
   let errorSource = null;
+  const userId = event.user;
+  const adminChannelId = process.env.ADMIN_CHANNEL_ID;
   
   try {
     // Try to load all data in parallel for better performance
@@ -2272,13 +2465,27 @@ slackApp.event('app_home_opened', async ({ event, client, logger }) => {
     }
     
     // Get user-specific information for personalization
-    const userId = event.user;
     let onCallStatus = null;
     let upcomingShifts = [];
+    let isAdminUser = false;
     
     if (userId) {
       // Calculate user's on-call status
       onCallStatus = getUserOnCallStatus(userId, current);
+
+      // Admin CTA: strict conditional display based on fresh cache only.
+      if (adminChannelId) {
+        try {
+          const cached = await AdminMembershipRepository.get(userId);
+          if (cached && cached.isMember === true && isFresh(cached.checkedAt, DEFAULT_TTL_MS)) {
+            isAdminUser = true;
+          }
+        } catch (error) {
+          logger?.warn?.('[app_home_opened] Failed reading admin membership cache; defaulting isAdmin=false', {
+            error: error.message
+          });
+        }
+      }
       
       // Get user's upcoming shifts
       try {
@@ -2292,11 +2499,39 @@ slackApp.event('app_home_opened', async ({ event, client, logger }) => {
     
     // Build and publish home view with available data
     // buildHomeView handles null values gracefully
-    const homeView = await buildHomeView(current, next, disciplines, userId, onCallStatus, upcomingShifts);
+    const homeView = await buildHomeView(current, next, disciplines, userId, onCallStatus, upcomingShifts, isAdminUser);
     await client.views.publish({
       user_id: event.user,
       view: homeView
     });
+
+    // If admin membership is unknown/stale, refresh in background and republish only if confirmed admin.
+    if (userId && adminChannelId && isAdminUser === false) {
+      void (async () => {
+        try {
+          const cached = await AdminMembershipRepository.get(userId);
+          const needsRefresh = !cached || !isFresh(cached.checkedAt, DEFAULT_TTL_MS);
+          if (!needsRefresh) return;
+
+          const result = await isUserInAdminChannel({
+            client,
+            userId,
+            adminChannelId,
+            ttlMs: DEFAULT_TTL_MS,
+            logger
+          });
+
+          if (result.isMember === true) {
+            const refreshedView = await buildHomeView(current, next, disciplines, userId, onCallStatus, upcomingShifts, true);
+            await client.views.publish({ user_id: userId, view: refreshedView });
+          }
+        } catch (error) {
+          logger?.warn?.('[app_home_opened] Background admin membership refresh failed', {
+            error: error.message
+          });
+        }
+      })();
+    }
     
   } catch (error) {
     // Complete failure - show fallback view

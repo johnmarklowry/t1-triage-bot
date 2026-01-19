@@ -27,6 +27,30 @@ const railwayCronRouter = require('./routes/railwayCron');
 
 const app = express();
 
+// Lightweight access logging for Slack HTTP traffic (helps diagnose missing interactivity/options calls in HTTP mode).
+// Avoid logging request bodies or secrets; log only path/method/status/timing.
+app.use((req, res, next) => {
+  if (req.path === '/slack/events') {
+    const start = Date.now();
+    const ua = req.get('user-agent') || '';
+    const hasSig = !!req.get('x-slack-signature');
+    const hasTs = !!req.get('x-slack-request-timestamp');
+    res.on('finish', () => {
+      // eslint-disable-next-line no-console
+      console.log('[slack-events]', {
+        method: req.method,
+        path: req.path,
+        status: res.statusCode,
+        ms: Date.now() - start,
+        hasSig,
+        hasTs,
+        ua: ua.slice(0, 80)
+      });
+    });
+  }
+  next();
+});
+
 // Mount test routes on the same Express app that the Slack receiver uses
 app.use('/test', testRoutes);
 app.use('/jobs', railwayCronRouter);

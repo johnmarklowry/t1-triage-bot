@@ -34,6 +34,7 @@ model User {
   slackId    String    @unique @map("slack_id") @db.VarChar(50)
   name       String    @db.VarChar(100)
   discipline String    @db.VarChar(20)
+  active     Boolean   @default(true) @map("active")
   createdAt  DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
   updatedAt  DateTime? @default(now()) @map("updated_at") @db.Timestamp(6)
 

@@ -252,7 +252,7 @@ const SprintsRepository = {
   /**
    * Add a sprint using upsert
    */
-  async addSprint(sprintName, startDate, endDate, sprintIndex, changedBy = 'system') {
+  async addSprint(sprintName, startDate, endDate, sprintIndex, changedBy = 'system', reason = 'Sprint added/updated') {
     return await withRetry(async () => {
       return await transaction(async (client) => {
         const result = await client.query(`
@@ -274,7 +274,7 @@ const SprintsRepository = {
           start_date: startDate,
           end_date: endDate,
           sprint_index: sprintIndex
-        }, changedBy, 'Sprint added/updated');
+        }, changedBy, reason || 'Sprint added/updated');
         
         return sprintId;
       });

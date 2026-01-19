@@ -68,6 +68,37 @@ function formatPTDate(dateStr, formatStr = 'ddd MM/DD/YYYY') {
 }
 
 /**
+ * Format a sprint date range consistently in Pacific Time.
+ *
+ * Canonical format (same year): "Jan 14–Jan 27, 2026"
+ * Cross-year format: "Dec 29, 2026–Jan 11, 2027"
+ */
+function formatSprintRangePT(startDateStr, endDateStr) {
+  const start = parsePTDate(startDateStr);
+  const end = parsePTDate(endDateStr);
+  if (!start || !end) {
+    const s = String(startDateStr || '').trim() || 'N/A';
+    const e = String(endDateStr || '').trim() || 'N/A';
+    return `${s}–${e}`;
+  }
+
+  if (start.year() !== end.year()) {
+    return `${start.format('MMM D, YYYY')}–${end.format('MMM D, YYYY')}`;
+  }
+
+  return `${start.format('MMM D')}–${end.format('MMM D, YYYY')}`;
+}
+
+/**
+ * Format a sprint label consistently.
+ * Example: "FY26 Sp22 • Jan 14–Jan 27, 2026"
+ */
+function formatSprintLabelPT(sprintName, startDateStr, endDateStr) {
+  const name = String(sprintName || '').trim() || 'Sprint';
+  return `${name} • ${formatSprintRangePT(startDateStr, endDateStr)}`;
+}
+
+/**
  * Parse a date string consistently as midnight PT
  * Returns null for invalid dates instead of throwing errors
  */
@@ -663,8 +694,19 @@ async function getUpcomingSprints() {
 async function refreshCurrentState() {
   const current = await readCurrentState();
   if (current.sprintIndex === null) {
-    console.log('[refreshCurrentState] No current sprint index set');
-    return false;
+    // If we don't have a persisted sprintIndex yet, derive it from sprint dates and seed state.
+    const currentSprint = await findCurrentSprint();
+    if (!currentSprint || !Number.isFinite(Number(currentSprint.index))) {
+      console.log('[refreshCurrentState] No current sprint index set and no active sprint found');
+      return false;
+    }
+
+    const idx = Number(currentSprint.index);
+    const calculatedUsers = await getSprintUsers(idx);
+    const newState = { sprintIndex: idx, ...calculatedUsers };
+    await saveCurrentState(newState);
+    console.log('[refreshCurrentState] Initialized current state from active sprint:', { sprintIndex: idx });
+    return true;
   }
   
   // Get what the users SHOULD be based on calculation
@@ -712,6 +754,8 @@ module.exports = {
   
   // Date utilities
   formatPTDate,
+  formatSprintRangePT,
+  formatSprintLabelPT,
   parsePTDate,
   getTodayPT,
   

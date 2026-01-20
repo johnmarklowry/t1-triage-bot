@@ -1480,12 +1480,17 @@ if (!process.env.SLACK_BOT_TOKEN) {
 if (typeof slackApp?.use === 'function') {
   slackApp.use(async ({ body, logger, next }) => {
     try {
-      if (body?.type === 'block_suggestion') {
+      // In HTTP mode, interactive payloads arrive as x-www-form-urlencoded with a `payload` field.
+      // Bolt exposes this as `body.payload` (object). In Socket Mode, `body` itself often has `type`.
+      const payload = body?.payload || null;
+      const eventType = body?.type || payload?.type || null;
+
+      if (eventType === 'block_suggestion') {
         logger?.info?.('[block_suggestion] received', {
-          actionId: body?.action_id || null,
-          hasView: !!body?.view,
-          viewType: body?.view?.type || null,
-          callbackId: body?.view?.callback_id || null
+          actionId: body?.action_id || payload?.action_id || null,
+          hasView: !!(body?.view || payload?.view),
+          viewType: body?.view?.type || payload?.view?.type || null,
+          callbackId: body?.view?.callback_id || payload?.view?.callback_id || null
         });
       }
     } catch {}

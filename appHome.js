@@ -1475,6 +1475,24 @@ if (!process.env.SLACK_BOT_TOKEN) {
       });
 }
 
+// Minimal diagnostics for HTTP-mode `external_select` issues:
+// logs when we receive any block suggestion payload (used by external_select options).
+if (typeof slackApp?.use === 'function') {
+  slackApp.use(async ({ body, logger, next }) => {
+    try {
+      if (body?.type === 'block_suggestion') {
+        logger?.info?.('[block_suggestion] received', {
+          actionId: body?.action_id || null,
+          hasView: !!body?.view,
+          viewType: body?.view?.type || null,
+          callbackId: body?.view?.callback_id || null
+        });
+      }
+    } catch {}
+    await next();
+  });
+}
+
 /**
  * Open a minimal probe modal first, then update to the real modal.
  * This isolates trigger/context failures (probe fails) from payload failures (update fails).

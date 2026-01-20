@@ -35,6 +35,8 @@ app.use((req, res, next) => {
     const ua = req.get('user-agent') || '';
     const hasSig = !!req.get('x-slack-signature');
     const hasTs = !!req.get('x-slack-request-timestamp');
+    const contentType = req.get('content-type') || '';
+    const contentLength = req.get('content-length') || '';
     res.on('finish', () => {
       // eslint-disable-next-line no-console
       console.log('[slack-events]', {
@@ -44,6 +46,8 @@ app.use((req, res, next) => {
         ms: Date.now() - start,
         hasSig,
         hasTs,
+        contentType: contentType.slice(0, 80),
+        contentLength,
         ua: ua.slice(0, 80)
       });
     });

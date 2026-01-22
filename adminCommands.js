@@ -560,6 +560,11 @@ slackApp.action('admin_disciplines_reactivate', async ({ ack, body, client, logg
       }
       saveJSON(sourceFile, disciplinesObj);
     }
+
+    // Refresh the current disciplines modal view so counts/sections update immediately.
+    const meta = JSON.parse(body.view.private_metadata || '{}');
+    const view = await buildAdminDisciplinesModalView({ discipline, showInactive: !!meta.showInactive });
+    await client.views.update({ view_id: body.view.id, hash: body.view.hash, view });
   } catch (error) {
     logger?.error?.("Error reactivating user:", error);
   }
@@ -915,12 +920,14 @@ slackApp.action('admin_users_deactivate', async ({ ack, body, client, logger }) 
       await UsersRepository.deactivateUser(slackId, body.user?.id || 'system');
       await cache.del('disciplines:all');
     } else {
-      const disciplines = await readDisciplines();
-      for (const [disc, members] of Object.entries(disciplines || {})) {
+      // JSON mode: mutate the raw source file (readDisciplines() filters inactive users out).
+      const sourceFile = getDisciplinesSourceFile();
+      const disciplinesObj = loadJSON(sourceFile) || {};
+      for (const [disc, members] of Object.entries(disciplinesObj || {})) {
         if (!Array.isArray(members)) continue;
-        disciplines[disc] = members.map(m => (m?.slackId === slackId ? { ...m, active: false } : m));
+        disciplinesObj[disc] = members.map(m => (m?.slackId === slackId ? { ...m, active: false } : m));
       }
-      saveJSON(DISCIPLINES_FILE, disciplines);
+      saveJSON(sourceFile, disciplinesObj);
     }
 
     await rebuildAdminUsersModal({ client, viewId: body.view.id, viewHash: body.view.hash, logger });
@@ -943,12 +950,14 @@ slackApp.action('admin_users_reactivate', async ({ ack, body, client, logger }) 
       await UsersRepository.reactivateUser(slackId, body.user?.id || 'system');
       await cache.del('disciplines:all');
     } else {
-      const disciplines = await readDisciplines();
-      for (const [disc, members] of Object.entries(disciplines || {})) {
+      // JSON mode: mutate the raw source file (readDisciplines() filters inactive users out).
+      const sourceFile = getDisciplinesSourceFile();
+      const disciplinesObj = loadJSON(sourceFile) || {};
+      for (const [disc, members] of Object.entries(disciplinesObj || {})) {
         if (!Array.isArray(members)) continue;
-        disciplines[disc] = members.map(m => (m?.slackId === slackId ? { ...m, active: true } : m));
+        disciplinesObj[disc] = members.map(m => (m?.slackId === slackId ? { ...m, active: true } : m));
       }
-      saveJSON(DISCIPLINES_FILE, disciplines);
+      saveJSON(sourceFile, disciplinesObj);
     }
 
     await rebuildAdminUsersModal({ client, viewId: body.view.id, viewHash: body.view.hash, logger });

@@ -10,6 +10,8 @@ const {
   loadJSON
 } = require('../dataUtils');
 
+const { warnIfNonSlackMarkdown } = require('./slackMrkdwn');
+
 const DISCIPLINE_OPTIONS = [
   { label: 'Account', value: 'account' },
   { label: 'Producer', value: 'producer' },
@@ -26,9 +28,12 @@ function getDisciplinesSourceFile() {
 }
 
 function buildConfirm({ title, bodyText, confirmText }) {
+  // Confirm dialog text must be plain_text; warn if callers accidentally pass mrkdwn-ish strings.
+  warnIfNonSlackMarkdown(bodyText, 'adminViews.buildConfirm(bodyText)');
   return {
     title: { type: 'plain_text', text: title },
-    text: { type: 'mrkdwn', text: bodyText },
+    // Slack confirm dialogs only support plain_text (no mrkdwn).
+    text: { type: 'plain_text', text: bodyText },
     confirm: { type: 'plain_text', text: confirmText },
     deny: { type: 'plain_text', text: 'Cancel' }
   };
@@ -67,6 +72,11 @@ async function buildAdminDisciplinesModalView({ discipline, showInactive }) {
   const selected = discipline || 'account';
   const { active, inactive } = await getDisciplineMembersIncludingInactive(selected);
 
+  warnIfNonSlackMarkdown(
+    'Select a discipline and manage rotations. “Remove from rotations” deactivates a user globally (they remain in the system).',
+    'adminViews.buildAdminDisciplinesModalView(intro)'
+  );
+
   const selectOptions = DISCIPLINE_OPTIONS.map(o => ({
     text: { type: 'plain_text', text: o.label },
     value: o.value
@@ -102,7 +112,8 @@ async function buildAdminDisciplinesModalView({ discipline, showInactive }) {
 
   const deactivateConfirm = buildConfirm({
     title: 'Remove from rotations',
-    bodyText: 'This will deactivate the user and remove them from *all* rotations.\n\n- **THEN** they will not appear in any discipline rotation until reactivated.\n- **NOTE**: This does not delete the user.',
+    bodyText:
+      'This will deactivate the user and remove them from all rotations.\n\nThen:\n- They will not appear in any discipline rotation until reactivated.\n\nNote: This does not delete the user.',
     confirmText: 'Remove'
   });
 
@@ -209,6 +220,11 @@ async function buildAdminSprintsModalView({ page = 0, pageSize = 12 } = {}) {
     // Best-effort only; don't block admin UI on summary.
   }
 
+  warnIfNonSlackMarkdown(
+    'Manage sprint definitions.\n- *No deletions*: old sprints are retained for audit.\n- *Edits require a reason*: changes are recorded in the audit log.',
+    'adminViews.buildAdminSprintsModalView(intro)'
+  );
+
   const blocks = [
     { type: 'header', text: { type: 'plain_text', text: 'Sprint Management' } },
     {
@@ -216,7 +232,7 @@ async function buildAdminSprintsModalView({ page = 0, pageSize = 12 } = {}) {
       text: {
         type: 'mrkdwn',
         text:
-          'Manage sprint definitions.\n- **No deletions**: old sprints are retained for audit.\n- **Edits require a reason** and are recorded in the audit log.'
+          'Manage sprint definitions.\n- *No deletions*: old sprints are retained for audit.\n- *Edits require a reason*: changes are recorded in the audit log.'
       }
     },
     {
@@ -305,6 +321,11 @@ async function buildAdminSprintsModalView({ page = 0, pageSize = 12 } = {}) {
 }
 
 async function buildAdminUsersModalView() {
+  warnIfNonSlackMarkdown(
+    'Manage users without deleting them. Deactivated users are removed from all rotations.',
+    'adminViews.buildAdminUsersModalView(intro)'
+  );
+
   const useDatabase =
     process.env.USE_DATABASE !== 'false' &&
     !!process.env.DATABASE_URL;
@@ -339,7 +360,8 @@ async function buildAdminUsersModalView() {
 
   const deactivateConfirm = buildConfirm({
     title: 'Deactivate user',
-    bodyText: 'This will deactivate the user and remove them from *all* rotations.\n\n- They will not appear in rotation picks until reactivated.\n- This does *not* delete the user.',
+    bodyText:
+      'This will deactivate the user and remove them from all rotations.\n\n- They will not appear in rotation picks until reactivated.\n- This does not delete the user.',
     confirmText: 'Deactivate'
   });
 

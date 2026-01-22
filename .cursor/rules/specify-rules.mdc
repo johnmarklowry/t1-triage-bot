@@ -1,0 +1,47 @@
+# t1-triage-bot Development Guidelines
+
+Auto-generated from all feature plans. Last updated: 2025-11-06
+
+## Active Technologies
+- Node.js 18+ (matches existing project runtime) + dayjs with timezone plugin (already in use), existing triageLogic.js and dataUtils.js modules (002-fix-5pm-time-error)
+- N/A (bug fix, no storage changes) (002-fix-5pm-time-error)
+- Node.js 18+ + @slack/bolt, dayjs (001-improve-home-tab)
+- PostgreSQL (via dataUtils.js) with JSON fallback (001-improve-home-tab)
+- Node.js 18.x + node-cron, dayjs (utc/timezone plugins), @slack/web-api, pg (010-update-notify-cron)
+- PostgreSQL (via `db/repository.js`) with JSON file fallback through `dataUtils.js` (010-update-notify-cron)
+- Node.js ≥18 (per `package.json` engines) + `pg` / `pg-pool` (node-postgres) for migrations and repositories (010-update-notify-cron)
+- PostgreSQL (Railway-managed instance) (010-update-notify-cron)
+- Node.js 18 + `@slack/web-api`, `dayjs` with timezone plugin, custom repository layer (004-notification-updates)
+- PostgreSQL (`notification_snapshots`, `cron_trigger_audits` tables) (004-notification-updates)
+- Node.js 18+ (CommonJS) + pg (PostgreSQL client), pg-pool (connection pooling) (009-fix-migration-dependencies)
+- PostgreSQL database (009-fix-migration-dependencies)
+- Node.js 18+ (CommonJS) + Prisma CLI and Client (`prisma`, `@prisma/client`), PostgreSQL (010-prisma-orm)
+- PostgreSQL (Railway production), developer local Postgres (010-prisma-orm)
+- Node.js >=18.0.0, JavaScript (CommonJS) + Prisma 5.22.0, @prisma/client 5.22.0, PostgreSQL (via pg 8.11.3) (011-refactor-prisma-schema)
+- PostgreSQL database (connection via DATABASE_URL environment variable) (011-refactor-prisma-schema)
+
+- Node.js 18+ (matches existing project runtime) + Existing project dependencies (no new runtime dependencies required); Bash scripts for workflow automation (001-add-speckit)
+
+## Project Structure
+
+```text
+src/
+tests/
+```
+
+## Commands
+
+# Add commands for Node.js 18+ (matches existing project runtime)
+
+## Code Style
+
+Node.js 18+ (matches existing project runtime): Follow standard conventions
+
+## Recent Changes
+- 011-refactor-prisma-schema: Added Node.js >=18.0.0, JavaScript (CommonJS) + Prisma 5.22.0, @prisma/client 5.22.0, PostgreSQL (via pg 8.11.3)
+- 010-prisma-orm: Added Node.js 18+ (CommonJS) + Prisma CLI and Client (`prisma`, `@prisma/client`), PostgreSQL
+- 009-fix-migration-dependencies: Added Node.js 18+ (CommonJS) + pg (PostgreSQL client), pg-pool (connection pooling)
+
+
+<!-- MANUAL ADDITIONS START -->
+<!-- MANUAL ADDITIONS END -->

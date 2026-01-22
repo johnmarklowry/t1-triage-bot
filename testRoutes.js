@@ -435,6 +435,21 @@ router.get('/test-5pm-check', async (req, res) => {
     
     // Collect notifications instead of sending them
     const notifications = [];
+    const logEntries = [];
+    
+    // Capture console.warn and console.error
+    const originalWarn = console.warn;
+    const originalError = console.error;
+    
+    console.warn = (...args) => {
+      logEntries.push({ level: 'warn', message: args.join(' ') });
+      originalWarn.apply(console, args);
+    };
+    
+    console.error = (...args) => {
+      logEntries.push({ level: 'error', message: args.join(' ') });
+      originalError.apply(console, args);
+    };
     
     // Replace with mock functions
     require('./slackNotifier').notifyUser = (userId, text) => {
@@ -454,19 +469,389 @@ router.get('/test-5pm-check', async (req, res) => {
       console.log("Running 5PM check with mocked notifications");
       await require('./triageLogic').run5pmCheck();
       
+      // Check for "Invalid time value" errors
+      const invalidTimeErrors = logEntries.filter(entry => 
+        entry.message.includes('Invalid time value')
+      );
+      
+      // Check for admin notifications about errors
+      const adminErrorNotifications = notifications.filter(n => 
+        n.type === 'admin' && n.text.includes('Error')
+      );
+      
       res.json({
         message: "5PM check completed with mocked notifications",
         notifications,
-        wouldSendNotifications: notifications.length > 0
+        wouldSendNotifications: notifications.length > 0,
+        logEntries: logEntries.filter(e => e.level === 'warn' || e.level === 'error'),
+        validation: {
+          noInvalidTimeErrors: invalidTimeErrors.length === 0,
+          noAdminErrorNotifications: adminErrorNotifications.length === 0,
+          invalidTimeErrorsFound: invalidTimeErrors.length,
+          adminErrorNotificationsFound: adminErrorNotifications.length
+        }
       });
     } finally {
-      // Restore original notification functions
+      // Restore original functions
       require('./slackNotifier').notifyUser = originalNotifyUser;
       require('./slackNotifier').notifyAdmins = originalNotifyAdmins;
+      console.warn = originalWarn;
+      console.error = originalError;
     }
   } catch (err) {
     console.error('[test-5pm-check] Error:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /test-parseptdate
+ * Comprehensive test suite for parsePTDate() function
+ * Tests: T017-T021
+ */
+router.get('/test-parseptdate', (req, res) => {
+  try {
+    const testCases = [
+      {
+        name: 'T017: Valid date string',
+        input: '2025-03-18',
+        expectedResult: 'valid dayjs object',
+        expectedNull: false,
+        expectedWarning: false
+      },
+      {
+        name: 'T018: Null input',
+        input: null,
+        expectedResult: null,
+        expectedNull: true,
+        expectedWarning: true
+      },
+      {
+        name: 'T019: Undefined input',
+        input: undefined,
+        expectedResult: null,
+        expectedNull: true,
+        expectedWarning: true
+      },
+      {
+        name: 'T020: Empty string input',
+        input: '',
+        expectedResult: null,
+        expectedNull: true,
+        expectedWarning: true
+      },
+      {
+        name: 'T021: Invalid format input',
+        input: 'invalid',
+        expectedResult: null,
+        expectedNull: true,
+        expectedWarning: true
+      },
+      {
+        name: 'Additional: Whitespace-only string',
+        input: '   ',
+        expectedResult: null,
+        expectedNull: true,
+        expectedWarning: true
+      },
+      {
+        name: 'Additional: Invalid date format (MM/DD/YYYY)',
+        input: '03/18/2025',
+        expectedResult: null,
+        expectedNull: true,
+        expectedWarning: true
+      },
+      {
+        name: 'Additional: Invalid date value (invalid day)',
+        input: '2025-02-30',
+        expectedResult: null,
+        expectedNull: true,
+        expectedWarning: true
+      },
+      {
+        name: 'Additional: Valid date at year boundary',
+        input: '2024-12-31',
+        expectedResult: 'valid dayjs object',
+        expectedNull: false,
+        expectedWarning: false
+      }
+    ];
+    
+    const results = [];
+    
+    // Capture console.warn
+    const originalWarn = console.warn;
+    let testWarnings = [];
+    
+    console.warn = (...args) => {
+      const warningMsg = args.join(' ');
+      testWarnings.push(warningMsg);
+      originalWarn.apply(console, args);
+    };
+    
+    try {
+      for (const testCase of testCases) {
+        // Reset warnings for this test
+        testWarnings = [];
+        
+        const result = parsePTDate(testCase.input);
+        const isNull = result === null;
+        const isValid = result !== null && result.isValid && result.isValid();
+        const hasWarning = testWarnings.some(w => w.includes(`[parsePTDate]`));
+        
+        const testResult = {
+          testCase: testCase.name,
+          input: testCase.input,
+          result: isNull ? null : (isValid ? 'valid dayjs object' : 'invalid'),
+          isNull,
+          isValid,
+          hasWarning,
+          warningMessages: testWarnings.filter(w => w.includes(`[parsePTDate]`)),
+          passed: 
+            isNull === testCase.expectedNull &&
+            (testCase.expectedNull || isValid) &&
+            hasWarning === testCase.expectedWarning
+        };
+        
+        results.push(testResult);
+      }
+      
+      const allPassed = results.every(r => r.passed);
+      const passedCount = results.filter(r => r.passed).length;
+      
+      res.json({
+        message: `parsePTDate() test suite: ${passedCount}/${results.length} tests passed`,
+        allPassed,
+        results,
+        summary: {
+          total: results.length,
+          passed: passedCount,
+          failed: results.length - passedCount
+        }
+      });
+    } finally {
+      console.warn = originalWarn;
+    }
+  } catch (err) {
+    console.error('[test-parseptdate] Error:', err);
+    res.status(500).json({ 
+      error: err.message,
+      stack: err.stack 
+    });
+  }
+});
+
+/**
+ * GET /test-5pm-invalid-dates
+ * Test run5pmCheck() with various invalid date scenarios
+ * Tests: T025, T026
+ */
+router.get('/test-5pm-invalid-dates', async (req, res) => {
+  try {
+    const { readSprints, saveJSON, SPRINTS_FILE } = require('./dataUtils');
+    const fs = require('fs');
+    const path = require('path');
+    
+    // Store original notification functions
+    const originalNotifyUser = require('./slackNotifier').notifyUser;
+    const originalNotifyAdmins = require('./slackNotifier').notifyAdmins;
+    
+    // Collect notifications and logs
+    const notifications = [];
+    const logEntries = [];
+    
+    // Capture console.warn and console.error
+    const originalWarn = console.warn;
+    const originalError = console.error;
+    
+    console.warn = (...args) => {
+      logEntries.push({ level: 'warn', message: args.join(' ') });
+      originalWarn.apply(console, args);
+    };
+    
+    console.error = (...args) => {
+      logEntries.push({ level: 'error', message: args.join(' ') });
+      originalError.apply(console, args);
+    };
+    
+    // Replace with mock functions
+    require('./slackNotifier').notifyUser = (userId, text) => {
+      notifications.push({ type: 'user', userId, text });
+      return Promise.resolve();
+    };
+    
+    require('./slackNotifier').notifyAdmins = (text) => {
+      notifications.push({ type: 'admin', text });
+      return Promise.resolve();
+    };
+    
+    // Backup original sprints
+    const originalSprints = await readSprints();
+    const backupFile = SPRINTS_FILE + '.test-backup';
+    
+    try {
+      // Save backup
+      fs.writeFileSync(backupFile, JSON.stringify(originalSprints, null, 2));
+      
+      const testScenarios = [
+        {
+          name: 'Null endDate',
+          modifySprint: (sprint) => {
+            sprint.endDate = null;
+            return sprint;
+          }
+        },
+        {
+          name: 'Undefined endDate',
+          modifySprint: (sprint) => {
+            delete sprint.endDate;
+            return sprint;
+          }
+        },
+        {
+          name: 'Empty string endDate',
+          modifySprint: (sprint) => {
+            sprint.endDate = '';
+            return sprint;
+          }
+        },
+        {
+          name: 'Invalid format endDate',
+          modifySprint: (sprint) => {
+            sprint.endDate = 'invalid-date';
+            return sprint;
+          }
+        },
+        {
+          name: 'Invalid date value endDate',
+          modifySprint: (sprint) => {
+            sprint.endDate = '2025-02-30'; // Invalid day
+            return sprint;
+          }
+        }
+      ];
+      
+      const results = [];
+      
+      for (const scenario of testScenarios) {
+        // Reset collections
+        notifications.length = 0;
+        logEntries.length = 0;
+        
+        // Get current sprint and modify it
+        const currentSprint = await dataUtils.findCurrentSprint();
+        if (!currentSprint) {
+          results.push({
+            scenario: scenario.name,
+            skipped: true,
+            reason: 'No current sprint found'
+          });
+          continue;
+        }
+        
+        // Create modified sprint data
+        const modifiedSprints = originalSprints.map((s, i) => {
+          if (i === currentSprint.index) {
+            return scenario.modifySprint({ ...s });
+          }
+          return s;
+        });
+        
+        // Temporarily replace sprints
+        fs.writeFileSync(SPRINTS_FILE, JSON.stringify(modifiedSprints, null, 2));
+        
+        // Clear require cache to force reload
+        delete require.cache[require.resolve('./dataUtils')];
+        delete require.cache[require.resolve('./triageLogic')];
+        
+        // Re-require modules
+        const freshDataUtils = require('./dataUtils');
+        const freshTriageLogic = require('./triageLogic');
+        
+        try {
+          // Run 5PM check
+          await freshTriageLogic.run5pmCheck();
+          
+          // Check for errors
+          const invalidTimeErrors = logEntries.filter(entry => 
+            entry.message.includes('Invalid time value')
+          );
+          
+          const adminErrorNotifications = notifications.filter(n => 
+            n.type === 'admin' && n.text.includes('Error')
+          );
+          
+          results.push({
+            scenario: scenario.name,
+            passed: invalidTimeErrors.length === 0 && adminErrorNotifications.length === 0,
+            invalidTimeErrorsFound: invalidTimeErrors.length,
+            adminErrorNotificationsFound: adminErrorNotifications.length,
+            warnings: logEntries.filter(e => e.level === 'warn').map(e => e.message),
+            errors: logEntries.filter(e => e.level === 'error').map(e => e.message)
+          });
+        } catch (err) {
+          results.push({
+            scenario: scenario.name,
+            passed: false,
+            error: err.message,
+            stack: err.stack
+          });
+        }
+        
+        // Restore original sprints
+        fs.writeFileSync(SPRINTS_FILE, JSON.stringify(originalSprints, null, 2));
+        
+        // Clear cache again
+        delete require.cache[require.resolve('./dataUtils')];
+        delete require.cache[require.resolve('./triageLogic')];
+      }
+      
+      // Restore backup
+      if (fs.existsSync(backupFile)) {
+        fs.unlinkSync(backupFile);
+      }
+      
+      const allPassed = results.every(r => r.passed !== false);
+      
+      res.json({
+        message: `Invalid date scenario tests: ${results.filter(r => r.passed).length}/${results.length} passed`,
+        allPassed,
+        results,
+        validation: {
+          T025: results.every(r => !r.invalidTimeErrorsFound || r.invalidTimeErrorsFound === 0),
+          T026: results.every(r => !r.adminErrorNotificationsFound || r.adminErrorNotificationsFound === 0)
+        }
+      });
+    } catch (err) {
+      // Restore backup on error
+      if (fs.existsSync(backupFile)) {
+        fs.writeFileSync(SPRINTS_FILE, fs.readFileSync(backupFile));
+        fs.unlinkSync(backupFile);
+      }
+      throw err;
+    } finally {
+      // Restore original functions
+      require('./slackNotifier').notifyUser = originalNotifyUser;
+      require('./slackNotifier').notifyAdmins = originalNotifyAdmins;
+      console.warn = originalWarn;
+      console.error = originalError;
+      
+      // Restore original sprints
+      if (fs.existsSync(backupFile)) {
+        fs.writeFileSync(SPRINTS_FILE, fs.readFileSync(backupFile));
+        fs.unlinkSync(backupFile);
+      }
+      
+      // Clear cache
+      delete require.cache[require.resolve('./dataUtils')];
+      delete require.cache[require.resolve('./triageLogic')];
+    }
+  } catch (err) {
+    console.error('[test-5pm-invalid-dates] Error:', err);
+    res.status(500).json({ 
+      error: err.message,
+      stack: err.stack 
+    });
   }
 });
 
@@ -507,10 +892,10 @@ router.get('/force-transition', async (req, res) => {
   }
 });
 
-router.get('/sprint-data-check', (req, res) => {
+router.get('/sprint-data-check', async (req, res) => {
   try {
     // First, let's check what readSprints actually returns
-    const sprintsData = readSprints();
+    const sprintsData = await readSprints();
     
     // Let's examine what we got back
     const debugInfo = {
@@ -564,9 +949,9 @@ router.get('/debug-date', (req, res) => {
 /**
  * Detailed debug handler for sprint detection logic
  */
-function sprintDebugHandler(req, res) {
+async function sprintDebugHandler(req, res) {
   try {
-    const sprintsData = readSprints();
+    const sprintsData = await readSprints();
     
     // Basic information about the sprints data
     const debugInfo = {
@@ -654,6 +1039,209 @@ function sprintDebugHandler(req, res) {
     });
   }
 }
+
+/**
+ * GET /test/home-tab
+ * Returns JSON representation of home tab blocks for validation.
+ * Supports query parameters to test different data states:
+ * - ?state=empty - Test with no data
+ * - ?state=no-current - Test with missing current rotation
+ * - ?state=no-next - Test with missing next rotation
+ * - ?state=no-disciplines - Test with missing disciplines
+ */
+router.get('/home-tab', async (req, res) => {
+  try {
+    const { buildHomeView, buildFallbackView, getCurrentOnCall, getNextOnCall } = require('./appHome');
+    const { readDisciplines } = require('./dataUtils');
+    
+    const state = req.query.state || 'normal';
+    let current = null;
+    let next = null;
+    let disciplines = null;
+    
+    // Load data based on state parameter
+    if (state === 'empty') {
+      // Intentionally leave all as null
+      current = null;
+      next = null;
+      disciplines = null;
+    } else if (state === 'no-current') {
+      next = await getNextOnCall();
+      disciplines = await readDisciplines();
+      // current remains null
+    } else if (state === 'no-next') {
+      current = await getCurrentOnCall();
+      disciplines = await readDisciplines();
+      // next remains null
+    } else if (state === 'no-disciplines') {
+      current = await getCurrentOnCall();
+      next = await getNextOnCall();
+      // disciplines remains null
+    } else {
+      // Normal state - load all data
+      current = await getCurrentOnCall();
+      next = await getNextOnCall();
+      disciplines = await readDisciplines();
+    }
+    
+    // If all data is null, use fallback view
+    if (current === null && next === null && disciplines === null) {
+      const fallbackView = buildFallbackView(
+        'Unable to load rotation data. Please try again later.',
+        'test'
+      );
+      return res.json({
+        state,
+        view: fallbackView,
+        data: {
+          current: null,
+          next: null,
+          disciplines: null
+        }
+      });
+    }
+    
+    // Build normal home view with available data
+    const homeView = await buildHomeView(current, next, disciplines);
+    
+    res.json({
+      state,
+      view: homeView,
+      data: {
+        hasCurrent: current !== null,
+        hasNext: next !== null,
+        hasDisciplines: disciplines !== null
+      },
+      blocks: homeView.blocks,
+      blockCount: homeView.blocks.length
+    });
+  } catch (error) {
+    console.error('[test/home-tab] Error:', error);
+    res.status(500).json({
+      error: `Error generating home tab view: ${error.message}`,
+      stack: error.stack
+    });
+  }
+});
+
+/**
+ * GET /test/migration-validation
+ * Test route for migration dependency validation
+ * Returns validation results for a specific migration file or all pending migrations
+ * Usage:
+ *   GET /test/migration-validation?filename=004_create_notification_snapshots.sql
+ *   GET /test/migration-validation (validates all pending migrations)
+ */
+router.get('/migration-validation', async (req, res) => {
+  try {
+    const { parseMigrationFile, validateDependencies, getExecutedTables } = require('./db/migrationValidator');
+    const { getExecutedMigrations, getMigrationFiles } = require('./db/migrate');
+    const fs = require('fs');
+    const path = require('path');
+    
+    const filename = req.query.filename;
+    const MIGRATIONS_DIR = path.join(__dirname, 'db', 'migrations');
+    
+    if (filename) {
+      // Validate a specific migration file
+      const filePath = path.join(MIGRATIONS_DIR, filename);
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({
+          error: `Migration file not found: ${filename}`
+        });
+      }
+      
+      const sql = fs.readFileSync(filePath, 'utf8');
+      const migrationFile = parseMigrationFile(filename, sql);
+      const executedTables = await getExecutedTables();
+      const executedMigrations = await getExecutedMigrations();
+      
+      // Get all migration files for cross-migration validation
+      const allMigrationFiles = [];
+      const available = getMigrationFiles();
+      for (const f of available) {
+        if (f !== filename) {
+          const fp = path.join(MIGRATIONS_DIR, f);
+          const content = fs.readFileSync(fp, 'utf8');
+          allMigrationFiles.push(parseMigrationFile(f, content));
+        }
+      }
+      allMigrationFiles.push(migrationFile);
+      
+      const validation = await validateDependencies(migrationFile, executedTables, allMigrationFiles);
+      
+      res.json({
+        filename,
+        valid: validation.valid,
+        errors: validation.errors,
+        warnings: validation.warnings,
+        migrationInfo: {
+          tablesCreated: migrationFile.tablesCreated,
+          dependencies: migrationFile.dependencies,
+          statementCount: migrationFile.statements.length
+        },
+        executedTables: executedTables.length,
+        executedMigrations: executedMigrations.length
+      });
+    } else {
+      // Validate all pending migrations
+      const executed = await getExecutedMigrations();
+      const available = getMigrationFiles();
+      const pending = available.filter(file => !executed.includes(file));
+      
+      if (pending.length === 0) {
+        return res.json({
+          message: 'No pending migrations to validate',
+          pending: 0,
+          executed: executed.length
+        });
+      }
+      
+      const executedTables = await getExecutedTables();
+      const allMigrationFiles = [];
+      
+      for (const f of pending) {
+        const filePath = path.join(MIGRATIONS_DIR, f);
+        const sql = fs.readFileSync(filePath, 'utf8');
+        allMigrationFiles.push(parseMigrationFile(f, sql));
+      }
+      
+      const results = [];
+      for (const migrationFile of allMigrationFiles) {
+        const validation = await validateDependencies(migrationFile, executedTables, allMigrationFiles);
+        results.push({
+          filename: migrationFile.filename,
+          valid: validation.valid,
+          errors: validation.errors,
+          warnings: validation.warnings,
+          tablesCreated: migrationFile.tablesCreated,
+          dependencies: migrationFile.dependencies.length
+        });
+      }
+      
+      const allValid = results.every(r => r.valid);
+      
+      res.json({
+        allValid,
+        pending: pending.length,
+        executed: executed.length,
+        results,
+        summary: {
+          valid: results.filter(r => r.valid).length,
+          invalid: results.filter(r => !r.valid).length,
+          totalErrors: results.reduce((sum, r) => sum + r.errors.length, 0),
+          totalWarnings: results.reduce((sum, r) => sum + r.warnings.length, 0)
+        }
+      });
+    }
+  } catch (error) {
+    console.error('[test/migration-validation] Error:', error);
+    res.status(500).json({
+      error: `Error validating migrations: ${error.message}`,
+      stack: error.stack
+    });
+  }
+});
 
 // Add advanced simulation routes from testSystem.js
 addTestRoutes(router);

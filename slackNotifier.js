@@ -83,9 +83,44 @@ async function updateOnCallUserGroup(userIdsArray) {
   }
 }
 
+/**
+ * Notify users whose rotation status changed.
+ * @param {Array<{role: string, oldUser?: string|null, newUser?: string|null}>} changes
+ */
+async function notifyRotationChanges(changes = []) {
+  if (!Array.isArray(changes) || changes.length === 0) {
+    return { sent: 0 };
+  }
+
+  let sent = 0;
+
+  for (const change of changes) {
+    const { role, newUser, oldUser } = change;
+
+    if (newUser) {
+      await notifyUser(
+        newUser,
+        `You have been assigned to ${role} triage duty starting now.`
+      );
+      sent += 1;
+    }
+
+    if (oldUser) {
+      await notifyUser(
+        oldUser,
+        `You have been removed from ${role} triage duty.`
+      );
+      sent += 1;
+    }
+  }
+
+  return { sent };
+}
+
 module.exports = {
   notifyUser,
   notifyAdmins,
   updateOnCallUserGroup,
-  updateChannelTopic
+  updateChannelTopic,
+  notifyRotationChanges
 };

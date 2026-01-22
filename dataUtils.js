@@ -1,7 +1,7 @@
 /**
  * dataUtils.js
  * Centralized data operations for the triage rotation app.
- * Updated with validation and consistency improvements
+ * Updated to use PostgreSQL database with backward compatibility
  */
 const fs = require('fs');
 const path = require('path');
@@ -12,11 +12,53 @@ const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-// Define file paths for persisted JSON data
+// Import database repositories
+const { 
+  UsersRepository, 
+  SprintsRepository, 
+  CurrentStateRepository, 
+  OverridesRepository 
+} = require('./db/repository');
+
+// Environment detection
+const IS_STAGING = process.env.TRIAGE_ENV === 'staging' || process.env.NODE_ENV === 'staging';
+
+// Define file paths for persisted JSON data (kept for backup/compatibility)
 const CURRENT_STATE_FILE = path.join(__dirname, "currentState.json");
 const SPRINTS_FILE = path.join(__dirname, "sprints.json");
+const DISCIPLINES_STAGING_FILE = path.join(__dirname, "disciplines.staging.json");
 const DISCIPLINES_FILE = path.join(__dirname, "disciplines.json");
 const OVERRIDES_FILE = path.join(__dirname, "overrides.json");
+
+// Configuration for dual-write mode (can be disabled after validation)
+const DUAL_WRITE_MODE = process.env.DUAL_WRITE_MODE !== 'false';
+const USE_DATABASE = process.env.USE_DATABASE !== 'false';
+const HAS_DATABASE_URL = !!process.env.DATABASE_URL;
+// Overrides are used to compute on-call assignments; prefer DB when available.
+// To force JSON overrides (not recommended), set OVERRIDES_SOURCE=json.
+// If DB read fails and you want a temporary fallback to JSON, set OVERRIDES_JSON_FALLBACK=true.
+const OVERRIDES_SOURCE = (process.env.OVERRIDES_SOURCE || '').toLowerCase();
+
+// Redis cache (optional)
+const cache = require('./cache/redisClient');
+const CACHE_TTLS = {
+  sprintsAll: 60 * 60 * 6, // 6h
+  disciplinesAll: 60 * 15, // 15m
+  currentState: 10, // 10s
+  overridesAll: 10, // 10s
+  sprintUsers: 60 // 60s
+};
+
+async function cacheGetOrSetJson(key, ttlSeconds, fetchFn) {
+  const cached = await cache.getJson(key);
+  if (cached !== null && cached !== undefined) return cached;
+  const value = await fetchFn();
+  // Avoid caching null/undefined placeholders; cache empty arrays/objects are ok.
+  if (value !== null && value !== undefined) {
+    await cache.setJson(key, value, ttlSeconds);
+  }
+  return value;
+}
 
 /**
  * Format a date consistently using Pacific Time
@@ -26,10 +68,62 @@ function formatPTDate(dateStr, formatStr = 'ddd MM/DD/YYYY') {
 }
 
 /**
+ * Format a sprint date range consistently in Pacific Time.
+ *
+ * Canonical format (same year): "Jan 14–Jan 27, 2026"
+ * Cross-year format: "Dec 29, 2026–Jan 11, 2027"
+ */
+function formatSprintRangePT(startDateStr, endDateStr) {
+  const start = parsePTDate(startDateStr);
+  const end = parsePTDate(endDateStr);
+  if (!start || !end) {
+    const s = String(startDateStr || '').trim() || 'N/A';
+    const e = String(endDateStr || '').trim() || 'N/A';
+    return `${s}–${e}`;
+  }
+
+  if (start.year() !== end.year()) {
+    return `${start.format('MMM D, YYYY')}–${end.format('MMM D, YYYY')}`;
+  }
+
+  return `${start.format('MMM D')}–${end.format('MMM D, YYYY')}`;
+}
+
+/**
+ * Format a sprint label consistently.
+ * Example: "FY26 Sp22 • Jan 14–Jan 27, 2026"
+ */
+function formatSprintLabelPT(sprintName, startDateStr, endDateStr) {
+  const name = String(sprintName || '').trim() || 'Sprint';
+  return `${name} • ${formatSprintRangePT(startDateStr, endDateStr)}`;
+}
+
+/**
  * Parse a date string consistently as midnight PT
+ * Returns null for invalid dates instead of throwing errors
  */
 function parsePTDate(dateStr) {
-  return dayjs.tz(`${dateStr}T00:00:00`, "America/Los_Angeles");
+  // Validate input is non-null, non-undefined, and non-empty string
+  if (!dateStr || typeof dateStr !== 'string' || dateStr.trim() === '') {
+    console.warn(`[parsePTDate] Invalid date string: ${dateStr} (null, undefined, or empty)`);
+    return null;
+  }
+  
+  // Validate format (YYYY-MM-DD)
+  const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+  if (!datePattern.test(dateStr)) {
+    console.warn(`[parsePTDate] Invalid date format: ${dateStr} (expected YYYY-MM-DD)`);
+    return null;
+  }
+  
+  // Attempt parsing
+  const parsed = dayjs.tz(`${dateStr}T00:00:00`, "America/Los_Angeles");
+  if (!parsed.isValid()) {
+    console.warn(`[parsePTDate] Invalid date value: ${dateStr} (dayjs parsing failed)`);
+    return null;
+  }
+  
+  return parsed;
 }
 
 /**
@@ -40,7 +134,7 @@ function getTodayPT() {
 }
 
 /**
- * Generic function to load JSON from a file
+ * Generic function to load JSON from a file (legacy support)
  */
 function loadJSON(filePath) {
   try {
@@ -53,7 +147,7 @@ function loadJSON(filePath) {
 }
 
 /**
- * Generic function to save JSON to a file
+ * Generic function to save JSON to a file (legacy support)
  */
 function saveJSON(filePath, data) {
   try {
@@ -67,73 +161,232 @@ function saveJSON(filePath, data) {
 }
 
 /**
- * Get all sprints from sprints.json
+ * Get all sprints from database
  */
-function readSprints() {
-  const sprints = loadJSON(SPRINTS_FILE);
-  if (!Array.isArray(sprints)) {
-    console.error('[readSprints] Invalid sprints data: not an array');
-    return [];
+async function readSprints() {
+  if (!USE_DATABASE) {
+    const sprints = loadJSON(SPRINTS_FILE);
+    if (!Array.isArray(sprints)) {
+      console.error('[readSprints] Invalid sprints data: not an array');
+      return [];
+    }
+    // Ensure each sprint has a stable sprintIndex in JSON mode (defaults to array position).
+    return sprints.map((s, i) => ({
+      ...s,
+      sprintIndex: Number.isFinite(s?.sprintIndex) ? s.sprintIndex : i
+    }));
   }
-  return sprints;
+
+  try {
+    return await cacheGetOrSetJson('sprints:all', CACHE_TTLS.sprintsAll, async () => {
+      const sprints = await SprintsRepository.getAll();
+      return sprints.map(sprint => {
+        // Convert Date objects to YYYY-MM-DD strings for consistency
+        const formatDate = (date) => {
+          if (!date) return null;
+          if (date instanceof Date) {
+            return date.toISOString().split('T')[0];
+          }
+          if (typeof date === 'string') {
+            return date.split('T')[0]; // Handle ISO strings
+          }
+          return String(date);
+        };
+        
+        return {
+          sprintName: sprint.sprintName,
+          startDate: formatDate(sprint.startDate),
+          endDate: formatDate(sprint.endDate),
+          sprintIndex: sprint.sprintIndex
+        };
+      });
+    });
+  } catch (error) {
+    console.error('[readSprints] Database error:', error);
+    // Fallback to JSON if database fails
+    const sprints = loadJSON(SPRINTS_FILE);
+    if (!Array.isArray(sprints)) return [];
+    return sprints.map((s, i) => ({
+      ...s,
+      sprintIndex: Number.isFinite(s?.sprintIndex) ? s.sprintIndex : i
+    }));
+  }
 }
 
 /**
- * Get all disciplines from disciplines.json with validation
+ * Upsert a sprint (DB-first when available) and invalidate sprint caches.
+ * - Never deletes sprints (append + edit only).
+ * - In DB mode, updates are logged via audit_logs with the provided reason.
  */
-function readDisciplines() {
-  const disciplines = loadJSON(DISCIPLINES_FILE) || {};
-  
-  // Validate that no user appears in multiple disciplines
-  const allUsers = new Map(); // userId -> discipline
-  const duplicates = [];
-  
-  for (const [discipline, users] of Object.entries(disciplines)) {
-    if (!Array.isArray(users)) continue;
-    
-    for (const user of users) {
-      if (allUsers.has(user.slackId)) {
-        duplicates.push({
-          userId: user.slackId,
-          name: user.name,
-          disciplines: [allUsers.get(user.slackId), discipline]
-        });
-      } else {
-        allUsers.set(user.slackId, discipline);
+async function upsertSprint({ sprintName, startDate, endDate, sprintIndex, changedBy = 'system', reason }) {
+  if (USE_DATABASE) {
+    try {
+      await SprintsRepository.addSprint(
+        sprintName,
+        startDate,
+        endDate,
+        sprintIndex,
+        changedBy,
+        reason || 'Sprint added/updated'
+      );
+
+      // Invalidate cached sprint list
+      await cache.del('sprints:all');
+
+      // Dual-write to JSON for backup/compatibility
+      if (DUAL_WRITE_MODE) {
+        const existing = loadJSON(SPRINTS_FILE);
+        const list = Array.isArray(existing) ? existing.slice() : [];
+        const idx = list.findIndex(s => Number.isFinite(s?.sprintIndex) && s.sprintIndex === sprintIndex);
+        const row = { sprintName, startDate, endDate, sprintIndex };
+        if (idx >= 0) list[idx] = row;
+        else list.push(row);
+        saveJSON(SPRINTS_FILE, list);
       }
+
+      return true;
+    } catch (error) {
+      console.error('[upsertSprint] Database error, falling back to JSON:', error);
+      // Fall through to JSON write
     }
   }
-  
-  if (duplicates.length > 0) {
-    console.error('[readDisciplines] WARNING: Users found in multiple disciplines:', duplicates);
-    // You might want to notify admins here
-  }
-  
-  return disciplines;
+
+  // JSON-only mode (or DB fallback)
+  const existing = loadJSON(SPRINTS_FILE);
+  const list = Array.isArray(existing) ? existing.slice() : [];
+  const idx = list.findIndex(s => Number.isFinite(s?.sprintIndex) && s.sprintIndex === sprintIndex);
+  const row = { sprintName, startDate, endDate, sprintIndex };
+  if (idx >= 0) list[idx] = row;
+  else list.push(row);
+  saveJSON(SPRINTS_FILE, list);
+  return true;
 }
 
 /**
- * Get the current state from currentState.json
+ * Get all disciplines from database
  */
-function readCurrentState() {
-  const state = loadJSON(CURRENT_STATE_FILE);
-  if (!state) {
-    return {
+async function readDisciplines() {
+  if (!USE_DATABASE) {
+    // Prefer staging file if in staging and it exists
+    const sourceFile = (IS_STAGING && fs.existsSync(DISCIPLINES_STAGING_FILE))
+      ? DISCIPLINES_STAGING_FILE
+      : DISCIPLINES_FILE;
+    const disciplines = loadJSON(sourceFile) || {};
+
+    // Filter out inactive users (kept in data for admin visibility, excluded from rotations)
+    for (const [discipline, users] of Object.entries(disciplines)) {
+      if (!Array.isArray(users)) continue;
+      disciplines[discipline] = users.filter(u => u?.active !== false);
+    }
+    
+    // Validate that no user appears in multiple disciplines
+    const allUsers = new Map(); // userId -> discipline
+    const duplicates = [];
+    
+    for (const [discipline, users] of Object.entries(disciplines)) {
+      if (!Array.isArray(users)) continue;
+      
+      for (const user of users) {
+        if (allUsers.has(user.slackId)) {
+          duplicates.push({
+            userId: user.slackId,
+            name: user.name,
+            disciplines: [allUsers.get(user.slackId), discipline]
+          });
+        } else {
+          allUsers.set(user.slackId, discipline);
+        }
+      }
+    }
+    
+    if (duplicates.length > 0) {
+      console.error('[readDisciplines] WARNING: Users found in multiple disciplines:', duplicates);
+    }
+    
+    return disciplines;
+  }
+
+  try {
+    const disciplines = await cacheGetOrSetJson('disciplines:all', CACHE_TTLS.disciplinesAll, async () => {
+      return await UsersRepository.getDisciplines();
+    });
+    
+    // Validate that no user appears in multiple disciplines
+    const allUsers = new Map();
+    const duplicates = [];
+    
+    for (const [discipline, users] of Object.entries(disciplines)) {
+      for (const user of users) {
+        if (allUsers.has(user.slackId)) {
+          duplicates.push({
+            userId: user.slackId,
+            name: user.name,
+            disciplines: [allUsers.get(user.slackId), discipline]
+          });
+        } else {
+          allUsers.set(user.slackId, discipline);
+        }
+      }
+    }
+    
+    if (duplicates.length > 0) {
+      console.error('[readDisciplines] WARNING: Users found in multiple disciplines:', duplicates);
+    }
+    
+    return disciplines;
+  } catch (error) {
+    console.error('[readDisciplines] Database error:', error);
+    // Fallback to JSON if database fails
+    const sourceFile = (IS_STAGING && fs.existsSync(DISCIPLINES_STAGING_FILE))
+      ? DISCIPLINES_STAGING_FILE
+      : DISCIPLINES_FILE;
+    return loadJSON(sourceFile) || {};
+  }
+}
+
+/**
+ * Get the current state from database
+ */
+async function readCurrentState() {
+  if (!USE_DATABASE) {
+    const state = loadJSON(CURRENT_STATE_FILE);
+    if (!state) {
+      return {
+        sprintIndex: null,
+        account: null,
+        producer: null,
+        po: null,
+        uiEng: null,
+        beEng: null
+      };
+    }
+    return state;
+  }
+
+  try {
+    const state = await cacheGetOrSetJson('currentState', CACHE_TTLS.currentState, async () => {
+      return await CurrentStateRepository.get();
+    });
+    return state;
+  } catch (error) {
+    console.error('[readCurrentState] Database error:', error);
+    // Fallback to JSON if database fails
+    const state = loadJSON(CURRENT_STATE_FILE);
+    return state || {
       sprintIndex: null,
       account: null,
       producer: null,
       po: null,
-      uiEng: null, 
+      uiEng: null,
       beEng: null
     };
   }
-  return state;
 }
 
 /**
- * Save the current state to currentState.json
+ * Save the current state to database
  */
-function saveCurrentState(state) {
+async function saveCurrentState(state) {
   // Validate no duplicate users in the state
   const users = [state.account, state.producer, state.po, state.uiEng, state.beEng]
     .filter(Boolean);
@@ -141,7 +394,6 @@ function saveCurrentState(state) {
   
   if (users.length !== uniqueUsers.size) {
     console.error('[saveCurrentState] WARNING: Duplicate users detected in state:', state);
-    // Find the duplicates
     const userCounts = {};
     users.forEach(u => {
       userCounts[u] = (userCounts[u] || 0) + 1;
@@ -151,62 +403,182 @@ function saveCurrentState(state) {
       .map(([userId, count]) => ({ userId, count }));
     console.error('[saveCurrentState] Duplicate users:', duplicates);
   }
-  
+
+  if (USE_DATABASE) {
+    try {
+      await CurrentStateRepository.update(state, 'dataUtils');
+      // Invalidate cache for current state (and computed sprint users if enabled)
+      await cache.del('currentState');
+      await cache.del(`sprintUsers:${state.sprintIndex}`);
+      
+      // Dual-write to JSON if enabled
+      if (DUAL_WRITE_MODE) {
+        saveJSON(CURRENT_STATE_FILE, state);
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('[saveCurrentState] Database error:', error);
+      // Fallback to JSON if database fails
+      return saveJSON(CURRENT_STATE_FILE, state);
+    }
+  }
+
   return saveJSON(CURRENT_STATE_FILE, state);
 }
 
 /**
- * Read overrides from overrides.json
+ * Read overrides from database
  */
-function readOverrides() {
-  return loadJSON(OVERRIDES_FILE) || [];
+async function readOverrides() {
+  if (OVERRIDES_SOURCE === 'json' || !HAS_DATABASE_URL) {
+    return loadJSON(OVERRIDES_FILE) || [];
+  }
+
+  try {
+    return await cacheGetOrSetJson('overrides:all', CACHE_TTLS.overridesAll, async () => {
+      const overrides = await OverridesRepository.getAll();
+      return overrides.map(override => ({
+        sprintIndex: override.sprintIndex,
+        role: override.role,
+        originalSlackId: override.originalSlackId,
+        newSlackId: override.newSlackId,
+        newName: override.newName,
+        requestedBy: override.requestedBy,
+        approved: override.approved,
+        approvedBy: override.approvedBy,
+        approvalTimestamp: override.approvalTimestamp,
+        timestamp: override.timestamp
+      }));
+    });
+  } catch (error) {
+    console.error('[readOverrides] Database error:', error);
+    // Default: do NOT consult JSON when DB is configured, to avoid using stale data.
+    // Optional escape hatch: OVERRIDES_JSON_FALLBACK=true
+    if (process.env.OVERRIDES_JSON_FALLBACK === 'true') {
+      return loadJSON(OVERRIDES_FILE) || [];
+    }
+    return [];
+  }
 }
 
 /**
- * Save overrides to overrides.json
+ * Save overrides to database
  */
-function saveOverrides(overrides) {
+async function saveOverrides(overrides) {
+  if (USE_DATABASE) {
+    try {
+      // Note: This is a simplified implementation
+      // In practice, you'd want to handle individual override operations
+      // rather than replacing the entire list
+      console.warn('[saveOverrides] Bulk override save not fully implemented for database');
+      
+      // Dual-write to JSON if enabled
+      if (DUAL_WRITE_MODE) {
+        saveJSON(OVERRIDES_FILE, overrides);
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('[saveOverrides] Database error:', error);
+      // Fallback to JSON if database fails
+      return saveJSON(OVERRIDES_FILE, overrides);
+    }
+  }
+
   return saveJSON(OVERRIDES_FILE, overrides);
 }
 
 /**
  * Find the current sprint based on today's date (in Pacific Time)
  */
-function findCurrentSprint() {
-  const sprints = readSprints();
-  const today = getTodayPT();
+async function findCurrentSprint() {
+  if (!USE_DATABASE) {
+    const sprints = await readSprints();
+    const today = getTodayPT();
 
-  for (let i = 0; i < sprints.length; i++) {
-    const { sprintName, startDate, endDate } = sprints[i];
-    const sprintStart = parsePTDate(startDate);
-    const sprintEnd = parsePTDate(endDate);
-    
-    if (
-      (today.isAfter(sprintStart) || today.isSame(sprintStart, 'day')) &&
-      (today.isBefore(sprintEnd) || today.isSame(sprintEnd, 'day'))
-    ) {
-      return { index: i, sprintName, startDate, endDate };
+    for (let i = 0; i < sprints.length; i++) {
+      const { sprintName, startDate, endDate } = sprints[i];
+      const sprintStart = parsePTDate(startDate);
+      const sprintEnd = parsePTDate(endDate);
+      
+      // Skip sprints with invalid dates
+      if (!sprintStart || !sprintEnd) {
+        continue;
+      }
+      
+      if (
+        (today.isAfter(sprintStart) || today.isSame(sprintStart, 'day')) &&
+        (today.isBefore(sprintEnd) || today.isSame(sprintEnd, 'day'))
+      ) {
+        return { index: i, sprintName, startDate, endDate };
+      }
     }
+    return null;
   }
-  return null;
+
+  try {
+    const currentSprint = await SprintsRepository.getCurrentSprint();
+    return currentSprint;
+  } catch (error) {
+    console.error('[findCurrentSprint] Database error:', error);
+    // Fallback to JSON logic
+    const sprints = await readSprints();
+    const today = getTodayPT();
+
+    for (let i = 0; i < sprints.length; i++) {
+      const { sprintName, startDate, endDate } = sprints[i];
+      const sprintStart = parsePTDate(startDate);
+      const sprintEnd = parsePTDate(endDate);
+      
+      // Skip sprints with invalid dates
+      if (!sprintStart || !sprintEnd) {
+        continue;
+      }
+      
+      if (
+        (today.isAfter(sprintStart) || today.isSame(sprintStart, 'day')) &&
+        (today.isBefore(sprintEnd) || today.isSame(sprintEnd, 'day'))
+      ) {
+        return { index: i, sprintName, startDate, endDate };
+      }
+    }
+    return null;
+  }
 }
 
 /**
  * Find the next sprint after a given index
  */
-function findNextSprint(currentIndex) {
-  const sprints = readSprints();
-  if (currentIndex + 1 < sprints.length) {
-    const next = sprints[currentIndex + 1];
-    return { index: currentIndex + 1, ...next };
+async function findNextSprint(currentIndex) {
+  if (!USE_DATABASE) {
+    const sprints = await readSprints();
+    if (currentIndex + 1 < sprints.length) {
+      const next = sprints[currentIndex + 1];
+      return { index: currentIndex + 1, ...next };
+    }
+    return null;
   }
-  return null;
+
+  try {
+    const nextSprint = await SprintsRepository.getNextSprint(currentIndex);
+    return nextSprint;
+  } catch (error) {
+    console.error('[findNextSprint] Database error:', error);
+    // Fallback to JSON logic
+    const sprints = await readSprints();
+    if (currentIndex + 1 < sprints.length) {
+      const next = sprints[currentIndex + 1];
+      return { index: currentIndex + 1, ...next };
+    }
+    return null;
+  }
 }
 
 /**
  * Get user for a specific sprint and role, handling overrides
  */
-function getUserForSprintAndRole(sprintIndex, role, disciplines, overrides) {
+async function getUserForSprintAndRole(sprintIndex, role, disciplines, overrides) {
   // Check for an approved override first
   const override = overrides.find(o =>
     o.sprintIndex === sprintIndex &&
@@ -222,36 +594,41 @@ function getUserForSprintAndRole(sprintIndex, role, disciplines, overrides) {
   // Fall back to regular rotation
   const roleList = disciplines[role] || [];
   if (roleList.length === 0) {
-    console.warn(`[getUserForSprintAndRole] No users in ${role} discipline, using fallback`);
-    return FALLBACK_USERS[role] || null;
+    console.warn(`[getUserForSprintAndRole] No users in ${role} discipline`);
+    const fallbacks = getFallbackUsers();
+    return fallbacks[role] || null; // In staging, this will be null to avoid assigning real users
   }
   
   const userObj = roleList[sprintIndex % roleList.length];
-  return userObj ? userObj.slackId : FALLBACK_USERS[role];
+  if (userObj && userObj.slackId) return userObj.slackId;
+  const fallbacks = getFallbackUsers();
+  return fallbacks[role] || null;
 }
 
 /**
  * Gets the user mapping for a specific sprint index
  * This is the single source of truth for who should be on call
  */
-function getSprintUsers(sprintIndex) {
-  const disciplines = readDisciplines();
-  const overrides = readOverrides();
+async function getSprintUsers(sprintIndex) {
+  const idx = Number.parseInt(String(sprintIndex), 10);
+  const cacheKey = Number.isFinite(idx) ? `sprintUsers:${idx}` : null;
+
+  if (cacheKey) {
+    const cached = await cache.getJson(cacheKey);
+    if (cached) return cached;
+  }
+
+  const disciplines = await readDisciplines();
+  const overrides = await readOverrides();
   
-  const FALLBACK_USERS = {
-    account:  "U70RLDSL9",  // Megan Miller
-    producer: "U081U8XP1",  // Matt Mitchell
-    po:       "UA4K27ELX",  // John Mark Lowry
-    uiEng:    "U2SKVLZPF",  // Frank Tran
-    beEng:    "UTSQ413T6",  // Lyle Stockmoe
-  };
+  const FALLBACK_USERS = getFallbackUsers();
 
   const users = {
-    account: getUserForSprintAndRole(sprintIndex, "account", disciplines, overrides),
-    producer: getUserForSprintAndRole(sprintIndex, "producer", disciplines, overrides),
-    po: getUserForSprintAndRole(sprintIndex, "po", disciplines, overrides),
-    uiEng: getUserForSprintAndRole(sprintIndex, "uiEng", disciplines, overrides),
-    beEng: getUserForSprintAndRole(sprintIndex, "beEng", disciplines, overrides),
+    account: await getUserForSprintAndRole(sprintIndex, "account", disciplines, overrides),
+    producer: await getUserForSprintAndRole(sprintIndex, "producer", disciplines, overrides),
+    po: await getUserForSprintAndRole(sprintIndex, "po", disciplines, overrides),
+    uiEng: await getUserForSprintAndRole(sprintIndex, "uiEng", disciplines, overrides),
+    beEng: await getUserForSprintAndRole(sprintIndex, "beEng", disciplines, overrides),
   };
   
   // Validate no duplicate users
@@ -269,18 +646,43 @@ function getSprintUsers(sprintIndex) {
     console.error('[getSprintUsers] Duplicates:', duplicates);
   }
   
+  if (cacheKey) {
+    await cache.setJson(cacheKey, users, CACHE_TTLS.sprintUsers);
+  }
+
   return users;
+}
+
+/**
+ * Return environment-appropriate fallback user IDs per role.
+ * In staging, disable real fallbacks by returning an empty map.
+ */
+function getFallbackUsers() {
+  if (IS_STAGING) {
+    return {}; // No real fallbacks in staging to avoid assigning production users
+  }
+  return {
+    account:  "U70RLDSL9",  // Megan Miller
+    producer: "U081U8XP1",  // Matt Mitchell
+    po:       "UA4K27ELX",  // John Mark Lowry
+    uiEng:    "U2SKVLZPF",  // Frank Tran
+    beEng:    "UTSQ413T6",  // Lyle Stockmoe
+  };
 }
 
 /**
  * Get upcoming sprints from today onward
  */
-function getUpcomingSprints() {
-  const allSprints = readSprints();
+async function getUpcomingSprints() {
+  const allSprints = await readSprints();
   const today = getTodayPT();
   
   return allSprints.filter(sprint => {
     const sprintStart = parsePTDate(sprint.startDate);
+    // Skip sprints with invalid start dates
+    if (!sprintStart) {
+      return false;
+    }
     return sprintStart.isAfter(today) || sprintStart.isSame(today, 'day');
   });
 }
@@ -289,15 +691,26 @@ function getUpcomingSprints() {
  * Refresh the current state to ensure it matches calculated values
  * This ensures consistency between what's displayed and what's actual
  */
-function refreshCurrentState() {
-  const current = readCurrentState();
+async function refreshCurrentState() {
+  const current = await readCurrentState();
   if (current.sprintIndex === null) {
-    console.log('[refreshCurrentState] No current sprint index set');
-    return false;
+    // If we don't have a persisted sprintIndex yet, derive it from sprint dates and seed state.
+    const currentSprint = await findCurrentSprint();
+    if (!currentSprint || !Number.isFinite(Number(currentSprint.index))) {
+      console.log('[refreshCurrentState] No current sprint index set and no active sprint found');
+      return false;
+    }
+
+    const idx = Number(currentSprint.index);
+    const calculatedUsers = await getSprintUsers(idx);
+    const newState = { sprintIndex: idx, ...calculatedUsers };
+    await saveCurrentState(newState);
+    console.log('[refreshCurrentState] Initialized current state from active sprint:', { sprintIndex: idx });
+    return true;
   }
   
   // Get what the users SHOULD be based on calculation
-  const calculatedUsers = getSprintUsers(current.sprintIndex);
+  const calculatedUsers = await getSprintUsers(current.sprintIndex);
   
   // Check if they match current state
   let needsUpdate = false;
@@ -320,7 +733,7 @@ function refreshCurrentState() {
       sprintIndex: current.sprintIndex,
       ...calculatedUsers
     };
-    saveCurrentState(newState);
+    await saveCurrentState(newState);
     return true;
   }
   
@@ -341,6 +754,8 @@ module.exports = {
   
   // Date utilities
   formatPTDate,
+  formatSprintRangePT,
+  formatSprintLabelPT,
   parsePTDate,
   getTodayPT,
   
@@ -350,6 +765,7 @@ module.exports = {
   getSprintUsers,
   getUpcomingSprints,
   refreshCurrentState,
+  upsertSprint,
   
   // File path constants
   CURRENT_STATE_FILE,

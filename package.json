@@ -1,17 +1,29 @@
 {
   "name": "triage-rotation-app",
   "version": "1.0.0",
-  "description": "A Slack-based triage rotation system with Google Sheets",
+  "description": "A Slack-based triage rotation system that is database driven",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "node --inspect server.js",
+    "migrate": "node -e \"require('./db/migrate').runMigrations().then(() => process.exit(0))\"",
+    "migrate-data": "node db/migrate-json-data.js",
+    "db-status": "node -e \"require('./db/migrate').getMigrationStatus().then(status => { console.log(JSON.stringify(status, null, 2)); process.exit(0); })\"",
+    "prisma:generate": "npx prisma generate",
+    "prisma:migrate:dev": "npx prisma migrate dev",
+    "prisma:migrate:deploy": "npx prisma migrate deploy",
+    "prisma:validate": "npx prisma validate",
+    "prisma:format": "npx prisma format",
+    "prisma:seed": "node scripts/prisma-seed.js",
+    "prisma:seed:sprints": "node scripts/prisma-seed-sprints.js",
+    "prisma:seed:users": "node scripts/prisma-seed-users.js"
   },
   "dependencies": {
     "@fastify/formbody": "^7.4.0",
     "@fastify/static": "^6.10.2",
     "@fastify/view": "^8.0.0",
-    "@slack/web-api": "^6.9.0",
-    "@slack/bolt": "^3.12.2",
+    "@slack/bolt": "^4.6.0",
+    "@slack/web-api": "^7.0.0",
     "dayjs": "^1.11.13",
     "dotenv": "^16.0.0",
     "express": "^4.18.2",
@@ -19,17 +31,25 @@
     "googleapis": "^118.0.0",
     "handlebars": "^4.7.8",
     "node-cron": "^3.0.2",
-    "openai": "^4.24.1"
+    "openai": "^4.24.1",
+    "pg": "^8.11.3",
+    "pg-pool": "^3.6.1",
+    "redis": "^4.7.0",
+    "@prisma/client": "^5.22.0",
+    "prisma": "^5.22.0"
   },
   "engines": {
-    "node": "16.x"
+    "node": ">=18.0.0"
   },
   "repository": {
-    "url": "https://glitch.com/edit/#!/glitch-hello-node"
+    "url": "https://github.com/johnmarklowry/t1-triage-bot"
   },
   "license": "MIT",
   "keywords": [
     "node",
-    "glitch"
-  ]
+    "railway"
+  ],
+  "devDependencies": {
+    "supertest": "^7.1.4"
+  }
 }

@@ -317,8 +317,8 @@ slackApp.event('app_mention', async ({ event, client, logger }) => {
       channel: event.channel,
       thread_ts: threadTs,
       text: isFollowUp 
-        ? "I'm reconsidering my assessment based on your feedback... :thinking_face:"
-        : "I'm analyzing this thread and any Jira tickets to assess the bug severity... :mag:"
+        ? "I'm reconsidering my assessment based on your feedback..."
+        : "I'm analyzing this thread and any Jira tickets to assess the bug severity..."
     });
     
     // If this is a follow-up, use the existing conversation history
@@ -355,7 +355,7 @@ slackApp.event('app_mention', async ({ event, client, logger }) => {
       await client.chat.update({
         channel: event.channel,
         ts: processingMessage.ts,
-        text: "✅ I've reconsidered my assessment based on your feedback."
+        text: "I've reconsidered my assessment based on your feedback."
       });
       
       return;
@@ -450,7 +450,7 @@ slackApp.event('app_mention', async ({ event, client, logger }) => {
     await client.chat.update({
       channel: event.channel,
       ts: processingMessage.ts,
-      text: "✅ Assessment complete! Please see my analysis below."
+        text: "Assessment complete. Please see my analysis below."
     });
     
   } catch (error) {
@@ -489,7 +489,7 @@ slackApp.event('message', async ({ message, client, logger }) => {
       // Process follow-up question
       const processingMessage = await client.chat.postMessage({
         channel: message.channel,
-        text: "I'm reconsidering my assessment based on your feedback... :thinking_face:"
+        text: "I'm reconsidering my assessment based on your feedback..."
       });
       
       // Add the new user query
@@ -523,7 +523,7 @@ slackApp.event('message', async ({ message, client, logger }) => {
       await client.chat.update({
         channel: message.channel,
         ts: processingMessage.ts,
-        text: "✅ I've reconsidered my assessment based on your feedback."
+        text: "I've reconsidered my assessment based on your feedback."
       });
       
       return;
@@ -551,7 +551,7 @@ slackApp.event('message', async ({ message, client, logger }) => {
     // Process a single ticket assessment in DM
     const processingMessage = await client.chat.postMessage({
       channel: message.channel,
-      text: `I'm analyzing Jira ticket ${ticketId} to assess its severity... :mag:`
+      text: `I'm analyzing Jira ticket ${ticketId} to assess its severity...`
     });
     
     // Fetch the ticket details
@@ -600,7 +600,7 @@ slackApp.event('message', async ({ message, client, logger }) => {
     await client.chat.update({
       channel: message.channel,
       ts: processingMessage.ts,
-      text: "✅ Assessment complete! Please see my analysis below."
+      text: "Assessment complete. Please see my analysis below."
     });
     
   } catch (error) {

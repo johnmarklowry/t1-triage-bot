@@ -1,0 +1,169 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// Core Business Entities
+// ============================================================================
+
+/// Represents a sprint schedule with start/end dates and index
+model Sprint {
+  id            Int            @id @default(autoincrement())
+  sprintName    String         @map("sprint_name") @db.VarChar(50)
+  startDate     DateTime       @map("start_date") @db.Date
+  endDate       DateTime       @map("end_date") @db.Date
+  sprintIndex   Int            @unique @map("sprint_index")
+  createdAt     DateTime?      @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt     DateTime?      @default(now()) @map("updated_at") @db.Timestamp(6)
+  currentStates CurrentState[]
+  overrides     Override[]
+
+  @@index([startDate, endDate], map: "idx_sprints_dates")
+  @@index([sprintIndex], map: "idx_sprints_index")
+  @@map("sprints")
+}
+
+/// Represents user information with Slack ID and discipline assignments
+model User {
+  id         Int       @id @default(autoincrement())
+  slackId    String    @unique @map("slack_id") @db.VarChar(50)
+  name       String    @db.VarChar(100)
+  discipline String    @db.VarChar(20)
+  active     Boolean   @default(true) @map("active")
+  createdAt  DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt  DateTime? @default(now()) @map("updated_at") @db.Timestamp(6)
+
+  @@unique([slackId, discipline], map: "users_slack_discipline_unique")
+  @@index([discipline], map: "idx_users_discipline")
+  @@index([slackId], map: "idx_users_slack_id")
+  @@map("users")
+}
+
+/// Represents the single current active sprint and role assignments (singleton pattern - only one record with id=1)
+model CurrentState {
+  id              Int       @id @unique(map: "current_state_single_record") @default(autoincrement())
+  sprintIndex     Int?      @map("sprint_index")
+  accountSlackId  String?   @map("account_slack_id") @db.VarChar(50)
+  producerSlackId String?   @map("producer_slack_id") @db.VarChar(50)
+  poSlackId       String?   @map("po_slack_id") @db.VarChar(50)
+  uiEngSlackId    String?   @map("ui_eng_slack_id") @db.VarChar(50)
+  beEngSlackId    String?   @map("be_eng_slack_id") @db.VarChar(50)
+  updatedAt       DateTime? @default(now()) @map("updated_at") @db.Timestamp(6)
+  sprint          Sprint?   @relation(fields: [sprintIndex], references: [sprintIndex], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("current_state")
+}
+
+// ============================================================================
+// Workflow Models
+// ============================================================================
+
+/// Represents coverage override requests and approvals for sprint assignments
+model Override {
+  id                 Int       @id @default(autoincrement())
+  sprintIndex        Int       @map("sprint_index")
+  role               String    @db.VarChar(20)
+  originalSlackId    String?   @map("original_slack_id") @db.VarChar(50)
+  replacementSlackId String    @map("replacement_slack_id") @db.VarChar(50)
+  replacementName    String?   @map("replacement_name") @db.VarChar(100)
+  requestedBy        String    @map("requested_by") @db.VarChar(50)
+  approved           Boolean?  @default(false)
+  approvedBy         String?   @map("approved_by") @db.VarChar(50)
+  approvalTimestamp  DateTime? @map("approval_timestamp") @db.Timestamp(6)
+  createdAt          DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt          DateTime? @default(now()) @map("updated_at") @db.Timestamp(6)
+  sprint             Sprint    @relation(fields: [sprintIndex], references: [sprintIndex], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([sprintIndex, role, requestedBy, replacementSlackId], map: "overrides_unique_request")
+  @@index([approved], map: "idx_overrides_approved")
+  @@index([sprintIndex, role], map: "idx_overrides_sprint_role")
+  @@map("overrides")
+}
+
+// ============================================================================
+// System Models
+// ============================================================================
+
+/// Tracks all changes to database records for compliance and debugging
+model AuditLog {
+  id        Int       @id @default(autoincrement())
+  tableName String    @map("table_name") @db.VarChar(50)
+  recordId  Int?      @map("record_id")
+  operation String    @db.VarChar(20)
+  oldValues Json?     @map("old_values")
+  newValues Json?     @map("new_values")
+  changedBy String?   @map("changed_by") @db.VarChar(50)
+  changedAt DateTime? @default(now()) @map("changed_at") @db.Timestamp(6)
+  reason    String?
+
+  @@index([changedAt], map: "idx_audit_logs_changed_at")
+  @@index([tableName, recordId], map: "idx_audit_logs_table_record")
+  @@map("audit_logs")
+}
+
+/// Cache of whether a user is a member of the configured admin channel (for fast App Home rendering)
+model AdminChannelMembership {
+  slackId   String    @id @map("slack_id") @db.VarChar(50)
+  isMember  Boolean   @map("is_member")
+  checkedAt DateTime  @map("checked_at") @db.Timestamp(6)
+  updatedAt DateTime? @default(now()) @map("updated_at") @db.Timestamp(6)
+
+  @@index([checkedAt], map: "idx_admin_channel_membership_checked_at")
+  @@map("admin_channel_membership")
+}
+
+/// Represents discipline definitions per environment
+model Discipline {
+  id   String @id @default(cuid())
+  name String
+  env  String @db.VarChar(16)
+
+  @@unique([name, env], name: "name_env")
+  @@map("discipline")
+}
+
+/// Custom migration tracking table (legacy - Prisma uses _prisma_migrations table)
+model Migration {
+  id         Int       @id @default(autoincrement())
+  filename   String    @unique @db.VarChar(255)
+  executedAt DateTime? @default(now()) @map("executed_at") @db.Timestamp(6)
+  checksum   String?   @db.VarChar(64)
+
+  @@map("migrations")
+}
+
+/// Tracks Railway cron trigger executions for notification workflow
+model CronTriggerAudit {
+  id          String    @id @default(uuid()) @db.Uuid
+  triggeredAt DateTime  @default(now()) @map("triggered_at") @db.Timestamptz(6)
+  scheduledAt DateTime? @map("scheduled_at") @db.Timestamptz(6)
+  result      String    @db.VarChar(20) // 'delivered', 'skipped', 'deferred', 'error', 'pending'
+  details     Json?
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  snapshots   NotificationSnapshot[]
+
+  @@index([triggeredAt(sort: Desc)], map: "idx_cron_trigger_audits_triggered_at")
+  @@map("cron_trigger_audits")
+}
+
+/// Stores notification snapshots for deduplication and audit trail
+model NotificationSnapshot {
+  id                  Int              @id @default(autoincrement())
+  capturedAt          DateTime         @default(now()) @map("captured_at") @db.Timestamptz(6)
+  disciplineAssignments Json           @map("discipline_assignments")
+  hash                String
+  deliveryStatus      String           @map("delivery_status") @db.VarChar(20) // 'delivered', 'skipped', 'deferred'
+  deliveryReason      String?          @map("delivery_reason")
+  railwayTriggerId    String?          @map("railway_trigger_id") @db.Uuid
+  nextDelivery        DateTime?        @map("next_delivery") @db.Timestamptz(6)
+  cronTrigger         CronTriggerAudit? @relation(fields: [railwayTriggerId], references: [id], onDelete: SetNull)
+
+  @@index([hash], map: "idx_notification_snapshots_hash")
+  @@index([deliveryStatus], map: "idx_notification_snapshots_status")
+  @@map("notification_snapshots")
+}

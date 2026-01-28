@@ -498,49 +498,44 @@ async function findCurrentSprint() {
     const todayPT = getTodayPT();
 
     for (let i = 0; i < sprints.length; i++) {
-      const { sprintName, startDate, endDate } = sprints[i];
+      const s = sprints[i];
+      const { sprintName, startDate, endDate, sprintIndex } = s;
       const sprintStart = parsePTDate(startDate);
       const sprintEnd = parsePTDate(endDate);
-      
-      // Skip sprints with invalid dates
-      if (!sprintStart || !sprintEnd) {
-        continue;
-      }
-      
+      if (!sprintStart || !sprintEnd) continue;
       if (
         (todayPT.isAfter(sprintStart) || todayPT.isSame(sprintStart, 'day')) &&
         (todayPT.isBefore(sprintEnd) || todayPT.isSame(sprintEnd, 'day'))
       ) {
-        return { index: i, sprintName, startDate, endDate };
+        const idx = Number.isFinite(sprintIndex) ? Number(sprintIndex) : i;
+        return { index: idx, sprintName, startDate, endDate };
       }
     }
     return null;
   }
 
   try {
-    const currentSprint = await SprintsRepository.getCurrentSprint();
+    const todayPT = getTodayPT();
+    const todayDate = todayPT.toDate();
+    const currentSprint = await SprintsRepository.getCurrentSprint(todayDate);
     return currentSprint;
   } catch (error) {
     console.error('[findCurrentSprint] Database error:', error);
     // Fallback to JSON logic
     const sprints = await readSprints();
     const today = getTodayPT();
-
     for (let i = 0; i < sprints.length; i++) {
-      const { sprintName, startDate, endDate } = sprints[i];
+      const s = sprints[i];
+      const { sprintName, startDate, endDate, sprintIndex } = s;
       const sprintStart = parsePTDate(startDate);
       const sprintEnd = parsePTDate(endDate);
-      
-      // Skip sprints with invalid dates
-      if (!sprintStart || !sprintEnd) {
-        continue;
-      }
-      
+      if (!sprintStart || !sprintEnd) continue;
       if (
         (today.isAfter(sprintStart) || today.isSame(sprintStart, 'day')) &&
         (today.isBefore(sprintEnd) || today.isSame(sprintEnd, 'day'))
       ) {
-        return { index: i, sprintName, startDate, endDate };
+        const idx = Number.isFinite(sprintIndex) ? Number(sprintIndex) : i;
+        return { index: idx, sprintName, startDate, endDate };
       }
     }
     return null;
@@ -553,25 +548,23 @@ async function findCurrentSprint() {
 async function findNextSprint(currentIndex) {
   if (!USE_DATABASE) {
     const sprints = await readSprints();
-    if (currentIndex + 1 < sprints.length) {
-      const next = sprints[currentIndex + 1];
-      return { index: currentIndex + 1, ...next };
-    }
-    return null;
+    const sorted = sprints.slice().sort((a, b) => Number(a?.sprintIndex ?? 0) - Number(b?.sprintIndex ?? 0));
+    const next = sorted.find(s => Number(s?.sprintIndex ?? 0) > Number(currentIndex));
+    if (!next) return null;
+    const idx = Number.isFinite(next.sprintIndex) ? Number(next.sprintIndex) : null;
+    return idx != null ? { index: idx, ...next } : null;
   }
-
   try {
     const nextSprint = await SprintsRepository.getNextSprint(currentIndex);
     return nextSprint;
   } catch (error) {
     console.error('[findNextSprint] Database error:', error);
-    // Fallback to JSON logic
     const sprints = await readSprints();
-    if (currentIndex + 1 < sprints.length) {
-      const next = sprints[currentIndex + 1];
-      return { index: currentIndex + 1, ...next };
-    }
-    return null;
+    const sorted = sprints.slice().sort((a, b) => Number(a?.sprintIndex ?? 0) - Number(b?.sprintIndex ?? 0));
+    const next = sorted.find(s => Number(s?.sprintIndex ?? 0) > Number(currentIndex));
+    if (!next) return null;
+    const idx = Number.isFinite(next.sprintIndex) ? Number(next.sprintIndex) : null;
+    return idx != null ? { index: idx, ...next } : null;
   }
 }
 

@@ -17,6 +17,7 @@ const {
   loadJSON,
   getSprintUsers,
   refreshCurrentState,
+  findCurrentSprint,
   parsePTDate,
   getTodayPT,
   formatSprintRangePT,
@@ -94,52 +95,42 @@ async function getOnCallForSprint(sprintIndex=0, role, disciplines) {
 
 /**
  * Get the current on-call rotation.
- * Now ensures consistency by refreshing state if needed
+ * Uses only the sprint that contains today (by date) — never a future sprint.
+ * Also refreshes persisted state so other code paths stay in sync.
  * @returns {Promise<Object|null>} Current rotation object or null if not found
  */
 async function getCurrentOnCall() {
   try {
-    // First, refresh the current state to ensure it matches calculations
     await refreshCurrentState();
-    
-    const currentState = await readCurrentState();
+    const currentSprint = await findCurrentSprint();
+    if (!currentSprint || !Number.isFinite(Number(currentSprint.index))) {
+      return null;
+    }
     const sprints = await readSprints();
     const disciplines = await readDisciplines();
-
-    // Handle null/undefined sprint data gracefully
-    if (!currentState || currentState.sprintIndex === null || !sprints || sprints.length === 0) {
+    if (!sprints || sprints.length === 0) {
       return null;
     }
-
-    const curSprint = sprints.find(s => Number(s?.sprintIndex) === Number(currentState.sprintIndex));
+    const curSprint = sprints.find(s => Number(s?.sprintIndex) === Number(currentSprint.index));
     if (!curSprint) {
-      console.error('[getCurrentOnCall] Sprint not found for sprintIndex:', currentState.sprintIndex);
+      console.error('[getCurrentOnCall] Sprint not found for sprintIndex:', currentSprint.index);
       return null;
     }
-    
-    let users = [];
-    for (let role of ["account", "producer", "po", "uiEng", "beEng"]) {
+    const sprintUsers = await getSprintUsers(currentSprint.index);
+    const users = [];
+    for (const role of ['account', 'producer', 'po', 'uiEng', 'beEng']) {
+      const userId = sprintUsers[role];
+      if (!userId) continue;
       const roleArray = disciplines[role] || [];
-      // Find user object matching stored Slack ID
-      const userObj = roleArray.find(u => u.slackId === currentState[role]);
+      const userObj = roleArray.find(u => u.slackId === userId);
       if (userObj) {
         users.push({ role, name: userObj.name, slackId: userObj.slackId });
-      } else if (currentState[role]) {
-        // Fallback: use the stored Slack ID as both name and slackId.
-        console.warn(`[getCurrentOnCall] User ${currentState[role]} not found in ${role} discipline`);
-        users.push({ role, name: currentState[role], slackId: currentState[role] });
+      } else {
+        users.push({ role, name: userId, slackId: userId });
       }
     }
-    
-    // Validate no duplicate users
-    const userIds = users.map(u => u.slackId);
-    const uniqueIds = new Set(userIds);
-    if (userIds.length !== uniqueIds.size) {
-      console.error('[getCurrentOnCall] WARNING: Duplicate users detected:', users);
-    }
-    
     return {
-      sprintIndex: currentState.sprintIndex,
+      sprintIndex: curSprint.sprintIndex,
       sprintName: curSprint.sprintName,
       startDate: curSprint.startDate,
       endDate: curSprint.endDate,
@@ -153,54 +144,57 @@ async function getCurrentOnCall() {
 
 /**
  * Get the next on-call rotation.
- * Uses the centralized getSprintUsers for consistency
+ * Next = chronologically next sprint (first sprint whose start_date is after the current sprint's end).
+ * Never shows a future sprint as "current"; "next" is the sprint that will start after the current one.
  * @returns {Promise<Object|null>} Next rotation object or null if not found
  */
 async function getNextOnCall() {
   try {
-    const currentState = await readCurrentState();
+    const currentSprint = await findCurrentSprint();
     const sprints = await readSprints();
     const disciplines = await readDisciplines();
-
-    // Handle null/undefined sprint data gracefully
-    if (!currentState || currentState.sprintIndex === null) {
+    if (!sprints || sprints.length === 0) {
       return null;
     }
-
-    const sorted = (Array.isArray(sprints) ? sprints.slice() : [])
-      .sort((a, b) => Number(a?.sprintIndex ?? 0) - Number(b?.sprintIndex ?? 0));
-
-    const currentIdx = Number(currentState.sprintIndex);
-    const nextSprint = sorted.find(s => Number(s?.sprintIndex) > currentIdx) || null;
+    const today = getTodayPT();
+    const sortedByStart = sprints
+      .filter(s => s?.startDate)
+      .map(s => ({ ...s, startMoment: parsePTDate(typeof s.startDate === 'string' ? s.startDate : (s.startDate && typeof s.startDate.toISOString === 'function' ? s.startDate.toISOString().split('T')[0] : String(s.startDate))) }))
+      .filter(s => s.startMoment && s.startMoment.isValid())
+      .sort((a, b) => a.startMoment.valueOf() - b.startMoment.valueOf());
+    const currentEnd = currentSprint && (currentSprint.endDate != null)
+      ? parsePTDate(typeof currentSprint.endDate === 'string' ? currentSprint.endDate : (currentSprint.endDate.toISOString ? currentSprint.endDate.toISOString().split('T')[0] : String(currentSprint.endDate)))
+      : null;
+    const afterDate = currentEnd && currentEnd.isValid() ? currentEnd : today;
+    const currentSprintIndex = currentSprint && Number.isFinite(Number(currentSprint.index)) ? Number(currentSprint.index) : null;
+    const nextSprint = sortedByStart.find(s => {
+      const isAfterCurrent = s.startMoment.isAfter(afterDate) || s.startMoment.isSame(afterDate, 'day');
+      const isDifferentFromCurrent = currentSprintIndex == null || Number(s.sprintIndex) !== currentSprintIndex;
+      return isAfterCurrent && isDifferentFromCurrent;
+    });
     if (!nextSprint) {
-      console.warn('[getNextOnCall] Next sprint not found after sprintIndex:', currentState.sprintIndex);
       return null;
     }
-  
-    // Use centralized function to get users for the next sprint
     const sprintUsers = await getSprintUsers(nextSprint.sprintIndex);
-  
-    let users = [];
-    for (let role of ["account", "producer", "po", "uiEng", "beEng"]) {
+    const users = [];
+    for (const role of ['account', 'producer', 'po', 'uiEng', 'beEng']) {
       const userId = sprintUsers[role];
       if (!userId) continue;
-    
       const roleArray = disciplines[role] || [];
       const userObj = roleArray.find(u => u.slackId === userId);
-    
       if (userObj) {
         users.push({ role, name: userObj.name, slackId: userObj.slackId });
       } else {
-        console.warn(`[getNextOnCall] User ${userId} not found in ${role} discipline`);
         users.push({ role, name: userId, slackId: userId });
       }
     }
-  
+    const startStr = nextSprint.startDate && typeof nextSprint.startDate === 'string' ? nextSprint.startDate : (nextSprint.startDate && nextSprint.startDate.toISOString ? nextSprint.startDate.toISOString().split('T')[0] : null);
+    const endStr = nextSprint.endDate && typeof nextSprint.endDate === 'string' ? nextSprint.endDate : (nextSprint.endDate && nextSprint.endDate.toISOString ? nextSprint.endDate.toISOString().split('T')[0] : null);
     return {
       sprintIndex: nextSprint.sprintIndex,
       sprintName: nextSprint.sprintName,
-      startDate: nextSprint.startDate,
-      endDate: nextSprint.endDate,
+      startDate: startStr || nextSprint.startDate,
+      endDate: endStr || nextSprint.endDate,
       users
     };
   } catch (error) {

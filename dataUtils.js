@@ -495,7 +495,7 @@ async function saveOverrides(overrides) {
 async function findCurrentSprint() {
   if (!USE_DATABASE) {
     const sprints = await readSprints();
-    const today = getTodayPT();
+    const todayPT = getTodayPT();
 
     for (let i = 0; i < sprints.length; i++) {
       const { sprintName, startDate, endDate } = sprints[i];
@@ -508,8 +508,8 @@ async function findCurrentSprint() {
       }
       
       if (
-        (today.isAfter(sprintStart) || today.isSame(sprintStart, 'day')) &&
-        (today.isBefore(sprintEnd) || today.isSame(sprintEnd, 'day'))
+        (todayPT.isAfter(sprintStart) || todayPT.isSame(sprintStart, 'day')) &&
+        (todayPT.isBefore(sprintEnd) || todayPT.isSame(sprintEnd, 'day'))
       ) {
         return { index: i, sprintName, startDate, endDate };
       }
@@ -693,22 +693,36 @@ async function getUpcomingSprints() {
  */
 async function refreshCurrentState() {
   const current = await readCurrentState();
+  // Always determine date-based current sprint so we can correct state when it drifts
+  const dateBasedSprint = await findCurrentSprint();
+
   if (current.sprintIndex === null) {
     // If we don't have a persisted sprintIndex yet, derive it from sprint dates and seed state.
-    const currentSprint = await findCurrentSprint();
-    if (!currentSprint || !Number.isFinite(Number(currentSprint.index))) {
+    if (!dateBasedSprint || !Number.isFinite(Number(dateBasedSprint.index))) {
       console.log('[refreshCurrentState] No current sprint index set and no active sprint found');
       return false;
     }
 
-    const idx = Number(currentSprint.index);
+    const idx = Number(dateBasedSprint.index);
     const calculatedUsers = await getSprintUsers(idx);
     const newState = { sprintIndex: idx, ...calculatedUsers };
     await saveCurrentState(newState);
     console.log('[refreshCurrentState] Initialized current state from active sprint:', { sprintIndex: idx });
     return true;
   }
-  
+
+  // Persisted sprint exists: correct it if it no longer matches today's date (index mismatch)
+  if (dateBasedSprint != null && Number.isFinite(Number(dateBasedSprint.index))) {
+    const dateBasedIndex = Number(dateBasedSprint.index);
+    if (Number(current.sprintIndex) !== dateBasedIndex) {
+      const calculatedUsers = await getSprintUsers(dateBasedIndex);
+      const newState = { sprintIndex: dateBasedIndex, ...calculatedUsers };
+      await saveCurrentState(newState);
+      console.log('[refreshCurrentState] Corrected sprint index by date:', { from: current.sprintIndex, to: dateBasedIndex });
+      return true;
+    }
+  }
+
   // Get what the users SHOULD be based on calculation
   const calculatedUsers = await getSprintUsers(current.sprintIndex);
   

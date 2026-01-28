@@ -158,5 +158,35 @@
     "sprintName": "FY27 Sp26",
     "startDate": "2027-03-17",
     "endDate": "2027-03-30"
+  },
+  {
+    "sprintName": "FY26 Sp21",
+    "startDate": "2026-01-21",
+    "endDate": "2026-02-04",
+    "sprintIndex": 0
+  },
+  {
+    "sprintName": "FY26 Sp22",
+    "startDate": "2026-02-04",
+    "endDate": "2026-02-17",
+    "sprintIndex": 1
+  },
+  {
+    "sprintName": "FY26 Sp23",
+    "startDate": "2026-02-17",
+    "endDate": "2026-03-03",
+    "sprintIndex": 2
+  },
+  {
+    "sprintName": "FY26 Sp24",
+    "startDate": "2026-03-03",
+    "endDate": "2026-03-17",
+    "sprintIndex": 3
+  },
+  {
+    "sprintName": "FY26 Sp25",
+    "startDate": "2026-03-17",
+    "endDate": "2026-03-31",
+    "sprintIndex": 4
   }
 ]

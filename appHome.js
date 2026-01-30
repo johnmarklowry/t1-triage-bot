@@ -31,11 +31,13 @@ const { DEFAULT_TTL_MS, isFresh, isUserInAdminChannel } = require('./services/ad
 const {
   buildAdminUsersModalView,
   buildAdminDisciplinesModalView,
-  buildAdminSprintsModalView
+  buildAdminSprintsModalView,
+  buildAdminOnCallModalView
 } = require('./services/adminViews');
 
 // Import environment-specific command utilities
 const { getEnvironmentCommand } = require('./commandUtils');
+const cache = require('./cache/redisClient');
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -2192,7 +2194,9 @@ function buildAdminHubModalView() {
         elements: [
           { type: 'button', text: { type: 'plain_text', text: 'Users' }, style: 'primary', action_id: 'admin_hub_open_users' },
           { type: 'button', text: { type: 'plain_text', text: 'Disciplines' }, action_id: 'admin_hub_open_disciplines' },
-          { type: 'button', text: { type: 'plain_text', text: 'Sprints' }, action_id: 'admin_hub_open_sprints' }
+          { type: 'button', text: { type: 'plain_text', text: 'Sprints' }, action_id: 'admin_hub_open_sprints' },
+          { type: 'button', text: { type: 'plain_text', text: 'Overrides' }, action_id: 'admin_hub_open_overrides' },
+          { type: 'button', text: { type: 'plain_text', text: 'On-call' }, action_id: 'admin_hub_open_oncall' }
         ]
       }
     ]
@@ -2345,6 +2349,26 @@ slackApp.action('admin_hub_open_sprints', async ({ ack, body, client, logger }) 
   }
 });
 
+slackApp.action('admin_hub_open_oncall', async ({ ack, body, client, logger }) => {
+  await ack();
+  const triggerId = body?.trigger_id;
+  const userId = body?.user?.id;
+
+  if (!triggerId) return;
+  if (!(await ensureAdminAccess({ client, userId, logger }))) return;
+
+  const view = await buildAdminOnCallModalView();
+
+  try {
+    await client.views.push({ trigger_id: triggerId, view });
+  } catch (error) {
+    logger?.warn?.('[admin_hub_open_oncall] views.push failed, falling back to views.open', {
+      error: error?.data?.error || error?.message
+    });
+    await client.views.open({ trigger_id: triggerId, view });
+  }
+});
+
 /**
  * Helper function to format disciplines as plain text for fallback
  */
@@ -2379,6 +2403,82 @@ async function formatDisciplinesAsText() {
 }
 
 /**
+ * Load home tab data (current, next, disciplines) for building the App Home view.
+ * @returns {Promise<{ current: Object|null, next: Object|null, disciplines: Object|null }>}
+ */
+async function loadHomeTabData() {
+  const [current, next, disciplines] = await Promise.all([
+    getCurrentOnCall().catch(err => {
+      console.error('[loadHomeTabData] Error loading current rotation:', err);
+      return null;
+    }),
+    getNextOnCall().catch(err => {
+      console.error('[loadHomeTabData] Error loading next rotation:', err);
+      return null;
+    }),
+    readDisciplines().catch(err => {
+      console.error('[loadHomeTabData] Error loading disciplines:', err);
+      return null;
+    })
+  ]);
+  return { current, next, disciplines };
+}
+
+/**
+ * Publish the App Home view for a specific user (e.g. after override apply).
+ * Loads data, builds view, and calls client.views.publish. Logs errors and does not throw.
+ * @param {Object} client - Slack Web API client (e.g. from action payload)
+ * @param {string} userId - Slack user ID to publish for
+ */
+async function publishAppHomeForUser(client, userId) {
+  if (!client || !userId) return;
+  try {
+    const { current, next, disciplines } = await loadHomeTabData();
+    if (current === null && next === null && disciplines === null) {
+      const fallbackView = buildFallbackView(
+        'Unable to load rotation data. Please try again later.',
+        'data source'
+      );
+      await client.views.publish({ user_id: userId, view: fallbackView });
+      return;
+    }
+    let onCallStatus = null;
+    let upcomingShifts = [];
+    let isAdminUser = false;
+    const adminChannelId = process.env.ADMIN_CHANNEL_ID;
+    if (userId) {
+      onCallStatus = getUserOnCallStatus(userId, current);
+      if (adminChannelId) {
+        try {
+          const cached = await AdminMembershipRepository.get(userId);
+          if (cached && cached.isMember === true && isFresh(cached.checkedAt, DEFAULT_TTL_MS)) {
+            isAdminUser = true;
+          }
+        } catch (err) {
+          // default isAdminUser stays false
+        }
+      }
+      try {
+        const sprints = await readSprints();
+        upcomingShifts = await getUserUpcomingShifts(userId, sprints, disciplines || {}, { limit: 3 });
+      } catch (err) {
+        console.error('[publishAppHomeForUser] Error loading upcoming shifts:', err);
+      }
+    }
+    const homeView = await buildHomeView(current, next, disciplines, userId, onCallStatus, upcomingShifts, isAdminUser);
+    await client.views.publish({ user_id: userId, view: homeView });
+  } catch (error) {
+    console.error('[publishAppHomeForUser] Failed to publish App Home for user:', userId, error);
+    try {
+      const { notifyAdmins } = require('./slackNotifier');
+      await notifyAdmins(`[publishAppHomeForUser] Failed for <@${userId}>: ${error.message}`);
+    } catch (notifyErr) {
+      console.error('[publishAppHomeForUser] Failed to notify admins:', notifyErr);
+    }
+  }
+}
+
+/**
  * Listen for the app_home_opened event and publish the App Home view.
  * Enhanced with comprehensive error handling, partial data support, and error context logging.
  */
@@ -2390,7 +2490,20 @@ slackApp.event('app_home_opened', async ({ event, client, logger }) => {
   let errorSource = null;
   const userId = event.user;
   const adminChannelId = process.env.ADMIN_CHANNEL_ID;
-  
+
+  // Invalidate rotation caches so we always show latest state when opening the tab
+  // (matches channel topic even if it was updated by 8am cron, test route, or another path)
+  try {
+    const currentSprint = await findCurrentSprint();
+    await cache.del('currentState');
+    await cache.del('overrides:all');
+    if (currentSprint && Number.isFinite(Number(currentSprint.index))) {
+      await cache.del(`sprintUsers:${currentSprint.index}`);
+    }
+  } catch (cacheErr) {
+    logger?.warn?.('[app_home_opened] Cache invalidation failed (continuing with load)', { error: cacheErr?.message });
+  }
+
   try {
     // Try to load all data in parallel for better performance
     // Each load is wrapped in try-catch to handle partial failures
@@ -2565,5 +2678,7 @@ module.exports = {
   buildHomeView,
   buildFallbackView,
   getCurrentOnCall,
-  getNextOnCall
+  getNextOnCall,
+  publishAppHomeForUser,
+  loadHomeTabData
 };

@@ -25,7 +25,7 @@ const {
   refreshCurrentState
 } = require("./dataUtils");
 
-const { notifyUser, notifyAdmins, updateOnCallUserGroup, updateChannelTopic } = require("./slackNotifier");
+const { notifyUser, notifyAdmins, updateOnCallUserGroup, updateChannelTopic, notifyRotationChanges } = require("./slackNotifier");
 
 // Define discipline-specific fallback IDs (if a discipline list is empty)
 const FALLBACK_USERS = {
@@ -321,6 +321,88 @@ async function run8amCheck() {
   }
 }
 
+/**
+ * Apply current sprint rotation from overrides/rotation (e.g. after override approve/remove).
+ * Syncs persisted state, in-memory state, user group, channel topic, and notifies affected users.
+ * @returns {{ updated: boolean, affectedUserIds: string[] }}
+ */
+async function applyCurrentSprintRotation() {
+  try {
+    const currentSprint = await findCurrentSprint();
+    if (!currentSprint || !Number.isFinite(Number(currentSprint.index))) {
+      return { updated: false, affectedUserIds: [] };
+    }
+    const oldState = await readCurrentState();
+    const newRoles = await getSprintUsers(currentSprint.index);
+    const changes = diffRoles(oldState, newRoles);
+    if (changes.length === 0) {
+      return { updated: false, affectedUserIds: [] };
+    }
+    console.log("[applyCurrentSprintRotation] Mid-cycle changes detected:", changes);
+    await notifyRotationChanges(changes);
+    const newUserArray = rolesToArray(newRoles);
+    await updateOnCallUserGroup(newUserArray);
+    await updateChannelTopic(newUserArray);
+    currentState = {
+      sprintIndex: currentSprint.index,
+      ...newRoles
+    };
+    await saveCurrentState(currentState);
+    const affectedUserIds = [...new Set(changes.flatMap(c => [c.oldUser, c.newUser].filter(Boolean)))];
+    return { updated: true, affectedUserIds };
+  } catch (err) {
+    console.error("[applyCurrentSprintRotation] Error:", err);
+    await notifyAdmins(`[applyCurrentSprintRotation] Error: ${err.message}`);
+    return { updated: false, affectedUserIds: [] };
+  }
+}
+
+/**
+ * Apply admin-supplied role map for the current sprint only.
+ * Diff with current state, notify, update user group/topic, save state, return affected user IDs.
+ * @param {{ account?: string|null, producer?: string|null, po?: string|null, uiEng?: string|null, beEng?: string|null }} newRoles
+ * @returns {{ updated: boolean, affectedUserIds: string[] }}
+ */
+async function setCurrentSprintRolesFromAdmin(newRoles) {
+  try {
+    const currentSprint = await findCurrentSprint();
+    if (!currentSprint || !Number.isFinite(Number(currentSprint.index))) {
+      return { updated: false, affectedUserIds: [] };
+    }
+    const oldState = await readCurrentState();
+    if (Number(oldState.sprintIndex) !== Number(currentSprint.index)) {
+      return { updated: false, affectedUserIds: [] };
+    }
+    const roles = {
+      account: newRoles.account ?? null,
+      producer: newRoles.producer ?? null,
+      po: newRoles.po ?? null,
+      uiEng: newRoles.uiEng ?? null,
+      beEng: newRoles.beEng ?? null
+    };
+    const changes = diffRoles(oldState, roles);
+    if (changes.length === 0) {
+      return { updated: false, affectedUserIds: [] };
+    }
+    console.log("[setCurrentSprintRolesFromAdmin] Applying admin changes:", changes);
+    await notifyRotationChanges(changes);
+    const newUserArray = rolesToArray(roles);
+    await updateOnCallUserGroup(newUserArray);
+    await updateChannelTopic(newUserArray);
+    currentState = {
+      sprintIndex: currentSprint.index,
+      ...roles
+    };
+    await saveCurrentState(currentState);
+    const affectedUserIds = [...new Set(changes.flatMap(c => [c.oldUser, c.newUser].filter(Boolean)))];
+    return { updated: true, affectedUserIds };
+  } catch (err) {
+    console.error("[setCurrentSprintRolesFromAdmin] Error:", err);
+    await notifyAdmins(`[setCurrentSprintRolesFromAdmin] Error: ${err.message}`);
+    return { updated: false, affectedUserIds: [] };
+  }
+}
+
 /* =================================
    Helper: Force a given sprintIndex
    (manual override if needed)
@@ -533,5 +615,7 @@ module.exports = {
   runImmediateRotation,
   setCurrentSprintState,
   getCurrentState,
-  forceSprintTransition
+  forceSprintTransition,
+  applyCurrentSprintRotation,
+  setCurrentSprintRolesFromAdmin
 };

@@ -5,8 +5,9 @@
 // const fs = require('fs'); // Unused - keeping for potential future use
 const fs = require('fs');
 const path = require('path');
-const { slackApp } = require('./appHome');
+const { slackApp, publishAppHomeForUser } = require('./appHome');
 const { getEnvironmentCommand } = require('./commandUtils');
+const { setCurrentSprintRolesFromAdmin } = require('./triageLogic');
 const cache = require('./cache/redisClient');
 const { UsersRepository } = require('./db/repository');
 const { 
@@ -899,6 +900,54 @@ slackApp.view('admin_users_add_modal', async ({ ack, body, view, client, logger 
   }
 });
 
+const ONCALL_UNASSIGNED_VALUE = '__none__';
+const ONCALL_ROLES = ['account', 'producer', 'po', 'uiEng', 'beEng'];
+
+slackApp.view('admin_change_oncall_modal', async ({ ack, body, view, client, logger }) => {
+  try {
+    const currentSprint = await findCurrentSprint();
+    if (!currentSprint || !Number.isFinite(Number(currentSprint.index))) {
+      await ack({
+        response_action: 'errors',
+        errors: { oncall_account: 'No current sprint. On-call can only be changed for the active sprint.' }
+      });
+      return;
+    }
+
+    const values = view.state?.values || {};
+    const newRoles = {};
+    for (const role of ONCALL_ROLES) {
+      const block = values[`oncall_${role}`];
+      const select = block?.[`oncall_${role}_select`];
+      const value = select?.selected_option?.value;
+      newRoles[role] = (value && value !== ONCALL_UNASSIGNED_VALUE) ? value : null;
+    }
+
+    const { updated, affectedUserIds } = await setCurrentSprintRolesFromAdmin(newRoles);
+
+    await ack();
+
+    // Refresh App Home for anyone who should see the updated rotation: affected users, current on-call list, and the admin who submitted
+    if (updated) {
+      const toRefresh = new Set([
+        ...(affectedUserIds || []),
+        ...Object.values(newRoles).filter(Boolean),
+        body.user?.id
+      ].filter(Boolean));
+      for (const uid of toRefresh) {
+        try {
+          await publishAppHomeForUser(client, uid);
+        } catch (err) {
+          logger?.error?.('[admin_change_oncall_modal] Failed to refresh App Home for user:', uid, err);
+        }
+      }
+    }
+  } catch (error) {
+    logger?.error?.('[admin_change_oncall_modal] Error:', error);
+    await ack();
+  }
+});
+
 async function rebuildAdminUsersModal({ client, viewId, viewHash, logger }) {
   const view = await buildAdminUsersModalView();
   const updateArgs = { view_id: viewId, view };
@@ -966,5 +1015,4 @@ slackApp.action('admin_users_reactivate', async ({ ack, body, client, logger }) 
   }
 });
 
-module.exports = {};
 module.exports = {};

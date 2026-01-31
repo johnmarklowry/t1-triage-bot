@@ -1,4 +1,0 @@
-{"location":"overrideHandler.js:approve_override:before_apply","message":"before applyCurrentSprintRotation","data":{"overrideSprintIndex":0,"currentSprintIndex":0,"sprintMatch":true},"timestamp":1769871387137,"sessionId":"debug-session","hypothesisId":"H2"}
-{"location":"triageLogic.js:applyCurrentSprintRotation","message":"diff result","data":{"oldPo":"U09PNFB226A","newPo":"UA4K27ELX","changesLen":2,"updated":true},"timestamp":1769871388055,"sessionId":"debug-session","hypothesisId":"H1"}
-{"location":"overrideHandler.js:approve_override:after_apply","message":"after applyCurrentSprintRotation","data":{"updated":true,"affectedUserIdsLen":4},"timestamp":1769871390259,"sessionId":"debug-session","hypothesisId":"H1,H4"}
-{"location":"overrideHandler.js:approve_override:refresh_loop","message":"publishing App Home","data":{"toRefreshSize":7},"timestamp":1769871390808,"sessionId":"debug-session","hypothesisId":"H4,H5"}

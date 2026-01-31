@@ -69,11 +69,10 @@ describe('overrideModal override/coverage', () => {
     it('shows fallback when context has empty role list', () => {
       const context = { role: 'po', disciplines: { po: [] } };
       const modal = buildOverrideStep1Modal('U_ANY', context);
-      const sprintBlock = modal.blocks?.find(
-        (b) => b.element?.action_id === 'sprint_select'
-      );
-      const options = sprintBlock?.element?.options || [];
-      expect(options.some((o) => o.value === 'none' || o.text?.plain_text?.includes('No scheduled'))).toBe(true);
+      // Empty role list yields info modal (no sprint_select block)
+      expect(modal.callback_id).toBe('override_info_modal');
+      const sectionText = modal.blocks?.find((b) => b.text?.text)?.text?.text || '';
+      expect(sectionText).toContain('No scheduled sprints found');
     });
   });
 });

@@ -40,6 +40,10 @@ mock.module('../../db/repository', () => ({
   },
 }));
 
+// Force fresh load so dataUtils picks up our mocked db/repository (avoids cache from other test files)
+if (typeof require.cache !== 'undefined') {
+  delete require.cache[require.resolve('../../dataUtils')];
+}
 const dataUtils = require('../../dataUtils');
 
 describe('dataUtils override/coverage', () => {

@@ -1,4 +1,4 @@
-const { describe, it, expect, mock, beforeEach } = require('bun:test');
+const { describe, it, expect, mock, beforeEach, beforeAll, afterAll } = require('bun:test');
 
 process.env.RAILWAY_CRON_SECRET = 'test-secret';
 
@@ -42,12 +42,27 @@ mock.module('../../services/notifications/weekdayPolicy', () => ({
 
 const request = require('supertest');
 const express = require('express');
+const http = require('http');
 const railwayCronRouter = require('../../routes/railwayCron');
 
 describe('POST /railway/notify-rotation', () => {
   const app = express();
   app.use(express.json());
   app.use('/jobs', railwayCronRouter);
+  const server = http.createServer(app);
+  let baseUrl;
+
+  beforeAll((done) => {
+    server.listen(0, () => {
+      const addr = server.address();
+      baseUrl = `http://127.0.0.1:${addr.port}`;
+      done();
+    });
+  });
+
+  afterAll((done) => {
+    server.close(done);
+  });
 
   beforeEach(() => {
     mock.clearAllMocks();
@@ -59,7 +74,7 @@ describe('POST /railway/notify-rotation', () => {
   });
 
   it('rejects requests without a valid signature when secret configured', async () => {
-    await request(app).post('/jobs/railway/notify-rotation').expect(401);
+    await request(baseUrl).post('/jobs/railway/notify-rotation').expect(401);
   });
 
   it('skips notification when assignments hash matches latest snapshot', async () => {
@@ -75,7 +90,7 @@ describe('POST /railway/notify-rotation', () => {
       },
     });
 
-    const response = await request(app)
+    const response = await request(baseUrl)
       .post('/jobs/railway/notify-rotation')
       .set('X-Railway-Cron-Signature', 'test-secret')
       .send({
@@ -110,7 +125,7 @@ describe('POST /railway/notify-rotation', () => {
       message: 'notifications sent',
     });
 
-    const response = await request(app)
+    const response = await request(baseUrl)
       .post('/jobs/railway/notify-rotation')
       .set('X-Railway-Cron-Signature', 'test-secret')
       .send({
@@ -123,5 +138,18 @@ describe('POST /railway/notify-rotation', () => {
     expect(response.body.notifications_sent).toBe(2);
     expect(response.body.snapshot_id).toBe(42);
     expect(saveSnapshot).toHaveBeenCalled();
+  });
+
+  it('returns 500 and message when handleRailwayNotification throws', async () => {
+    getNotificationAssignments.mockRejectedValue(new Error('job failed'));
+
+    const response = await request(baseUrl)
+      .post('/jobs/railway/notify-rotation')
+      .set('X-Railway-Cron-Signature', 'test-secret')
+      .send({ trigger_id: 'err-1', scheduled_at: '2025-11-10T16:00:00Z' })
+      .expect(500);
+
+    expect(response.body.status).toBe('error');
+    expect(response.body.message).toBe('job failed');
   });
 });

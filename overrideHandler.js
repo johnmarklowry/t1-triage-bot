@@ -9,7 +9,7 @@ const { slackApp, receiver, publishAppHomeForUser } = require('./appHome');
 const { getEnvironmentCommand } = require('./commandUtils');
 const { buildOverrideRequestModal, buildOverrideStep2Modal, buildMinimalDebugModal } = require('./overrideModal');
 const cache = require('./cache/redisClient');
-const { findCurrentSprint, getSprintUsers } = require('./dataUtils');
+const { findCurrentSprint, getSprintUsers, readSprints } = require('./dataUtils');
 const { applyCurrentSprintRotation } = require('./triageLogic');
 const { isUserInAdminChannel, DEFAULT_TTL_MS } = require('./services/adminMembership');
 
@@ -826,7 +826,7 @@ slackApp.command(getEnvironmentCommand('override-list'), async ({ command, ack, 
     
     // Build and open the modal
     const overrides = await getAllOverrides();
-    const modalView = buildOverrideListModal(overrides);
+    const modalView = await buildOverrideListModal(overrides);
     await client.views.open({
       trigger_id: command.trigger_id,
       view: modalView
@@ -875,7 +875,7 @@ slackApp.action('admin_hub_open_overrides', async ({ ack, body, client, logger }
       return;
     }
     const overrides = await getAllOverrides();
-    const modalView = buildOverrideListModal(overrides);
+    const modalView = await buildOverrideListModal(overrides);
     await client.views.push({ trigger_id: triggerId, view: modalView });
   } catch (err) {
     logger.error('[admin_hub_open_overrides] Error opening override list:', err);
@@ -898,9 +898,9 @@ slackApp.action('admin_hub_open_overrides', async ({ ack, body, client, logger }
 /**
  * buildOverrideListModal:
  * Lists all overrides in a single modal. Each override can be "removed" (decline).
- * If you want to allow approval from here, you can add an 'Approve' button as well.
+ * Shows sprint name (and date range when available) instead of sprint index.
  */
-function buildOverrideListModal(overrides) {
+async function buildOverrideListModal(overrides) {
   if (!overrides || overrides.length === 0) {
     return {
       type: "modal",
@@ -914,6 +914,18 @@ function buildOverrideListModal(overrides) {
       ]
     };
   }
+  const sprints = await readSprints();
+  const sprintLabel = (sprintIndex) => {
+    const idx = Number(sprintIndex);
+    const sprint = Array.isArray(sprints) ? sprints.find(s => Number(s.sprintIndex) === idx) : null;
+    if (!sprint) return `Sprint ${sprintIndex}`;
+    const name = sprint.sprintName || `Sprint ${idx}`;
+    const start = sprint.startDate || '';
+    const end = sprint.endDate || '';
+    const range = start && end ? `${start} to ${end}` : (start || end || '');
+    return range ? `${name} (${range})` : name;
+  };
+
   const blocks = [
     {
       type: "header",
@@ -921,9 +933,10 @@ function buildOverrideListModal(overrides) {
     },
     { type: "divider" }
   ];
-  
+
   overrides.forEach((o, idx) => {
-    const desc = `*Sprint Index:* ${o.sprintIndex}\n*Role:* ${o.role}\n*Requested By:* <@${o.requestedBy}>\n*Replacement:* <@${o.newSlackId}> (${o.newName || o.newSlackId})\n*Approved:* ${o.approved ? "Yes" : "No"}`;
+    const sprintDisplay = sprintLabel(o.sprintIndex);
+    const desc = `*Sprint:* ${sprintDisplay}\n*Role:* ${o.role}\n*Requested By:* <@${o.requestedBy}>\n*Replacement:* <@${o.newSlackId}> (${o.newName || o.newSlackId})\n*Approved:* ${o.approved ? "Yes" : "No"}`;
     blocks.push({
       type: "section",
       text: { type: "mrkdwn", text: desc },
@@ -937,7 +950,7 @@ function buildOverrideListModal(overrides) {
     });
     blocks.push({ type: "divider" });
   });
-  
+
   return {
     type: "modal",
     callback_id: "admin_override_list_modal",
@@ -1032,7 +1045,7 @@ slackApp.action('admin_remove_override', async ({ ack, body, client, logger }) =
 
     // Refresh the modal
     const updatedOverrides = await getAllOverrides();
-    const updatedView = buildOverrideListModal(updatedOverrides);
+    const updatedView = await buildOverrideListModal(updatedOverrides);
     await client.views.update({
       view_id: body.view.id,
       hash: body.view?.hash,

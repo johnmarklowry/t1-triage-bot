@@ -968,13 +968,19 @@ slackApp.action('admin_remove_override', async ({ ack, body, client, logger }) =
     // Remove from database or JSON
     if (USE_DATABASE) {
       try {
-        await OverridesRepository.declineOverride(
-          removed.sprintIndex,
-          removed.role,
-          removed.requestedBy,
-          removed.newSlackId,
-          body.user.id
-        );
+        // Delete by id so approved overrides are removed too (declineOverride only removes approved = false)
+        const deleted = removed.id != null
+          ? await OverridesRepository.deleteOverrideById(removed.id, body.user.id)
+          : await OverridesRepository.declineOverride(
+              removed.sprintIndex,
+              removed.role,
+              removed.requestedBy,
+              removed.newSlackId,
+              body.user.id
+            );
+        if (!deleted) {
+          logger.warn('[admin_remove_override] No row deleted for override', { removed: { id: removed.id, sprintIndex: removed.sprintIndex, role: removed.role } });
+        }
         await cache.del('overrides:all');
         await cache.del(`sprintUsers:${removed.sprintIndex}`);
       } catch (error) {
@@ -1029,6 +1035,7 @@ slackApp.action('admin_remove_override', async ({ ack, body, client, logger }) =
     const updatedView = buildOverrideListModal(updatedOverrides);
     await client.views.update({
       view_id: body.view.id,
+      hash: body.view?.hash,
       view: updatedView
     });
   } catch (err) {

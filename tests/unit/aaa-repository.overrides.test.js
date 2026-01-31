@@ -3,6 +3,12 @@ const { describe, it, expect, mock, beforeEach } = require('bun:test');
 const queryMock = mock();
 const transactionMock = mock();
 
+// Clear cache so we load real repository with our connection mock (avoids cached repo from other files)
+if (typeof require.cache !== 'undefined') {
+  delete require.cache[require.resolve('../../db/repository')];
+  delete require.cache[require.resolve('../../db/connection')];
+}
+
 mock.module('../../db/connection', () => ({
   query: queryMock,
   transaction: transactionMock,

@@ -29,7 +29,11 @@ mock.module('../../slackNotifier', () => ({
   notifyRotationChanges: notifyRotationChangesMock,
 }));
 
-const { applyCurrentSprintRotation } = require('../../triageLogic');
+// Force fresh load so triageLogic uses our mocked dataUtils/slackNotifier (avoids cache from other files)
+if (typeof require.cache !== 'undefined') {
+  delete require.cache[require.resolve('../../triageLogic')];
+}
+const { applyCurrentSprintRotation, setCurrentSprintRolesFromAdmin } = require('../../triageLogic');
 
 describe('triageLogic override/rotation', () => {
   beforeEach(() => {
@@ -92,6 +96,67 @@ describe('triageLogic override/rotation', () => {
 
       expect(result).toEqual({ updated: false, affectedUserIds: [] });
       expect(getSprintUsersMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('setCurrentSprintRolesFromAdmin', () => {
+    it('returns updated: true and affectedUserIds when newRoles differ from oldState', async () => {
+      readCurrentStateMock.mockResolvedValue({
+        sprintIndex: 0,
+        account: null,
+        producer: null,
+        po: 'U1',
+        uiEng: null,
+        beEng: null,
+      });
+
+      const result = await setCurrentSprintRolesFromAdmin({
+        account: null,
+        producer: null,
+        po: 'U2',
+        uiEng: null,
+        beEng: null,
+      });
+
+      expect(result).toEqual({ updated: true, affectedUserIds: expect.any(Array) });
+      expect(result.affectedUserIds).toContain('U1');
+      expect(result.affectedUserIds).toContain('U2');
+      expect(notifyRotationChangesMock).toHaveBeenCalledTimes(1);
+      expect(updateOnCallUserGroupMock).toHaveBeenCalledTimes(1);
+      expect(updateChannelTopicMock).toHaveBeenCalledTimes(1);
+      expect(saveCurrentStateMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns updated: false when newRoles match current state', async () => {
+      readCurrentStateMock.mockResolvedValue({
+        sprintIndex: 0,
+        account: null,
+        producer: null,
+        po: 'U1',
+        uiEng: null,
+        beEng: null,
+      });
+
+      const result = await setCurrentSprintRolesFromAdmin({
+        account: null,
+        producer: null,
+        po: 'U1',
+        uiEng: null,
+        beEng: null,
+      });
+
+      expect(result).toEqual({ updated: false, affectedUserIds: [] });
+      expect(notifyRotationChangesMock).not.toHaveBeenCalled();
+      expect(saveCurrentStateMock).not.toHaveBeenCalled();
+    });
+
+    it('returns updated: false when no current sprint', async () => {
+      findCurrentSprintMock.mockResolvedValue(null);
+
+      const result = await setCurrentSprintRolesFromAdmin({ po: 'U2' });
+
+      expect(result).toEqual({ updated: false, affectedUserIds: [] });
+      expect(readCurrentStateMock).not.toHaveBeenCalled();
     });
   });
 });

@@ -8,7 +8,7 @@ const readSprintsMock = mock(() =>
 
 mock.module('../../loadEnv', () => ({ loadEnv: () => {} }));
 mock.module('../../appHome', () => ({
-  slackApp: { action: () => {}, view: () => {}, command: () => {} },
+  slackApp: { action: () => {}, view: () => {}, command: () => {}, shortcut: () => {}, options: () => {} },
   receiver: {},
   publishAppHomeForUser: mock(() => Promise.resolve()),
 }));

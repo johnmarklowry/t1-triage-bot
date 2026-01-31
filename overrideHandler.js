@@ -759,12 +759,12 @@ slackApp.action('approve_override', handleApproveOverride);
    Action: decline_override
    (Admin channel flow)
    ========================= */
-slackApp.action('decline_override', async ({ ack, body, client, logger }) => {
+async function handleDeclineOverride({ ack, body, client, logger }) {
   await ack();
   try {
     const overrideInfo = JSON.parse(body.actions[0].value);
     const sprintLabel = overrideInfo.sprintLabel || formatSprintLabel(overrideInfo.sprintIndex);
-    
+
     const result = await declineOverride(
       overrideInfo.sprintIndex,
       overrideInfo.role,
@@ -772,15 +772,13 @@ slackApp.action('decline_override', async ({ ack, body, client, logger }) => {
       overrideInfo.replacementSlackId,
       body.user.id
     );
-    
+
     if (result) {
-      // Notify the requester
       await client.chat.postMessage({
         channel: overrideInfo.requesterId,
         text: `Your override request for ${overrideInfo.role} on ${sprintLabel} has been declined.`
       });
-      
-      // Update the admin channel message
+
       await client.chat.update({
         channel: body.channel.id,
         ts: body.message.ts,
@@ -805,7 +803,8 @@ slackApp.action('decline_override', async ({ ack, body, client, logger }) => {
   } catch (error) {
     logger.error("Error declining override:", error);
   }
-});
+}
+slackApp.action('decline_override', handleDeclineOverride);
 
 /* =========================
    /override-list
@@ -1058,4 +1057,4 @@ slackApp.action('admin_remove_override', async ({ ack, body, client, logger }) =
   }
 });
 
-module.exports = { buildOverrideListModal, handleApproveOverride };
+module.exports = { buildOverrideListModal, handleApproveOverride, handleDeclineOverride };

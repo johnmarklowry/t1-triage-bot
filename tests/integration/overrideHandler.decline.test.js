@@ -1,15 +1,14 @@
 const { describe, it, expect, mock, beforeEach } = require('bun:test');
 
-const findCurrentSprintMock = mock();
-const getSprintUsersMock = mock();
-const applyCurrentSprintRotationMock = mock();
-const publishAppHomeForUserMock = mock();
+const declineOverrideMock = mock();
+const postMessageMock = mock(() => Promise.resolve());
+const updateMock = mock(() => Promise.resolve());
 
 mock.module('../../loadEnv', () => ({ loadEnv: () => {} }));
 mock.module('../../appHome', () => ({
   slackApp: { action: () => {}, view: () => {}, command: () => {}, shortcut: () => {}, options: () => {} },
   receiver: {},
-  publishAppHomeForUser: publishAppHomeForUserMock,
+  publishAppHomeForUser: mock(() => Promise.resolve()),
 }));
 mock.module('../../commandUtils', () => ({ getEnvironmentCommand: (name) => name }));
 mock.module('../../cache/redisClient', () => ({
@@ -20,14 +19,12 @@ mock.module('../../cache/redisClient', () => ({
   del: mock(() => Promise.resolve()),
 }));
 mock.module('../../dataUtils', () => ({
-  findCurrentSprint: findCurrentSprintMock,
-  getSprintUsers: getSprintUsersMock,
+  findCurrentSprint: mock(() => Promise.resolve(null)),
+  getSprintUsers: mock(() => Promise.resolve({})),
   readSprints: mock(() => Promise.resolve([])),
   getRoleAndDisciplinesForUser: mock(() => Promise.resolve({ role: null, disciplines: {} })),
 }));
-mock.module('../../triageLogic', () => ({
-  applyCurrentSprintRotation: applyCurrentSprintRotationMock,
-}));
+mock.module('../../triageLogic', () => ({ applyCurrentSprintRotation: mock(() => Promise.resolve({ updated: false, affectedUserIds: [] })) }));
 mock.module('../../services/adminMembership', () => ({
   isUserInAdminChannel: mock(() => Promise.resolve(false)),
   DEFAULT_TTL_MS: 60000,
@@ -36,23 +33,23 @@ mock.module('../../db/repository', () => ({
   UsersRepository: { getDisciplines: mock(() => Promise.resolve({})) },
   OverridesRepository: {
     getAll: mock(() => Promise.resolve([])),
-    approveOverride: mock(() => Promise.resolve({ id: 1, approvalTimestamp: new Date().toISOString() })),
-    declineOverride: mock(() => Promise.resolve(false)),
+    approveOverride: mock(() => Promise.resolve(null)),
+    declineOverride: declineOverrideMock,
     deleteOverrideById: mock(() => Promise.resolve(false)),
   },
 }));
 
-// Force fresh load so overrideHandler uses our mocked triageLogic/appHome (avoids cache from other files)
+// Force fresh load so overrideHandler uses our mocks (avoids cache from other files)
 if (typeof require.cache !== 'undefined') {
   delete require.cache[require.resolve('../../overrideHandler')];
 }
-const { handleApproveOverride } = require('../../overrideHandler');
+const { handleDeclineOverride } = require('../../overrideHandler');
 
-describe('overrideHandler approve_override', () => {
+describe('overrideHandler decline_override', () => {
   const adminId = 'U_ADMIN';
   const requesterId = 'U_REQ';
   const replacementId = 'U_REPLACE';
-  const currentSprintIndex = 0;
+  const sprintIndex = 0;
 
   let ackMock;
   let clientMock;
@@ -61,11 +58,12 @@ describe('overrideHandler approve_override', () => {
 
   beforeEach(() => {
     mock.clearAllMocks();
+    declineOverrideMock.mockResolvedValue(true);
     ackMock = mock(() => Promise.resolve());
     clientMock = {
       chat: {
-        postMessage: mock(() => Promise.resolve()),
-        update: mock(() => Promise.resolve()),
+        postMessage: postMessageMock,
+        update: updateMock,
       },
     };
     loggerMock = { error: mock(() => {}) };
@@ -76,7 +74,7 @@ describe('overrideHandler approve_override', () => {
       actions: [
         {
           value: JSON.stringify({
-            sprintIndex: currentSprintIndex,
+            sprintIndex,
             role: 'po',
             requesterId,
             replacementSlackId: replacementId,
@@ -85,43 +83,69 @@ describe('overrideHandler approve_override', () => {
         },
       ],
     };
-    findCurrentSprintMock.mockResolvedValue({ index: currentSprintIndex });
-    getSprintUsersMock.mockResolvedValue({
-      account: null,
-      producer: null,
-      po: replacementId,
-      uiEng: null,
-      beEng: null,
-    });
-    applyCurrentSprintRotationMock.mockResolvedValue({
-      updated: true,
-      affectedUserIds: ['U_OLD', replacementId],
-    });
   });
 
-  it('calls applyCurrentSprintRotation once when override affects current sprint', async () => {
-    await handleApproveOverride({
+  it('calls ack', async () => {
+    await handleDeclineOverride({
       ack: ackMock,
       body,
       client: clientMock,
       logger: loggerMock,
     });
 
-    expect(applyCurrentSprintRotationMock).toHaveBeenCalledTimes(1);
+    expect(ackMock).toHaveBeenCalledTimes(1);
   });
 
-  it('calls publishAppHomeForUser for each affected user and admin when updated', async () => {
-    await handleApproveOverride({
+  it('calls declineOverride with correct args', async () => {
+    await handleDeclineOverride({
       ack: ackMock,
       body,
       client: clientMock,
       logger: loggerMock,
     });
 
-    expect(publishAppHomeForUserMock).toHaveBeenCalledWith(clientMock, expect.any(String));
-    const calledUserIds = publishAppHomeForUserMock.mock.calls.map((c) => c[1]);
-    expect(calledUserIds).toContain(adminId);
-    expect(calledUserIds).toContain(replacementId);
-    expect(calledUserIds).toContain('U_OLD');
+    expect(declineOverrideMock).toHaveBeenCalledTimes(1);
+    expect(declineOverrideMock).toHaveBeenCalledWith(
+      sprintIndex,
+      'po',
+      requesterId,
+      replacementId,
+      adminId
+    );
+  });
+
+  it('calls client.chat.postMessage to requester when decline succeeds', async () => {
+    await handleDeclineOverride({
+      ack: ackMock,
+      body,
+      client: clientMock,
+      logger: loggerMock,
+    });
+
+    expect(postMessageMock).toHaveBeenCalledTimes(1);
+    expect(postMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: requesterId,
+        text: expect.stringContaining('declined'),
+      })
+    );
+  });
+
+  it('calls client.chat.update for admin message when decline succeeds', async () => {
+    await handleDeclineOverride({
+      ack: ackMock,
+      body,
+      client: clientMock,
+      logger: loggerMock,
+    });
+
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    expect(updateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: body.channel.id,
+        ts: body.message.ts,
+        text: 'Override Declined',
+      })
+    );
   });
 });

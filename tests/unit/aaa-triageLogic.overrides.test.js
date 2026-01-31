@@ -30,7 +30,7 @@ mock.module('../../slackNotifier', () => ({
   notifyRotationChanges: notifyRotationChangesMock,
 }));
 
-// Force fresh load with mocks (avoid cached triageLogic from other test files)
+// Force fresh load so triageLogic uses our mocked dataUtils/slackNotifier (avoids cache from other files)
 const triageLogicPath = require.resolve('../../triageLogic');
 if (typeof require.cache !== 'undefined') {
   delete require.cache[triageLogicPath];

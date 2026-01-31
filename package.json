@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "bun --watch --inspect server.js",
-    "test": "bun test tests/unit/aaa-arepository.overrides.test.js && bun test tests/unit/aaa-dataUtils.overrides.test.js tests/unit/aaa-triageLogic.overrides.test.js tests/unit/commandUtils.test.js tests/unit/overrideHandler.list.test.js tests/unit/overrideModal.overrides.test.js tests/unit/scheduleCommandHandler.test.js tests/unit/slackMrkdwn.test.js tests/unit/weekdayPolicy.test.js",
+    "test": "bun test --serial",
     "test:integration": "bun test tests/integration",
     "test:all": "bun run test && bun run test:integration",
     "migrate": "node -e \"require('./db/migrate').runMigrations().then(() => process.exit(0))\"",

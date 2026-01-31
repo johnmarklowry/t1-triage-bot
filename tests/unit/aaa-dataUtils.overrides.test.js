@@ -40,7 +40,7 @@ mock.module('../../db/repository', () => ({
   },
 }));
 
-// Force fresh load so we get real dataUtils with our db/repository mock (avoid cached dataUtils from other tests)
+// Force fresh load so dataUtils picks up our mocked db/repository (avoids cache from other test files)
 const dataUtilsPath = require.resolve('../../dataUtils');
 if (typeof require.cache !== 'undefined') {
   delete require.cache[dataUtilsPath];

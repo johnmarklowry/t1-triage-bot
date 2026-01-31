@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --inspect server.js",
+    "dev": "bun --watch --inspect server.js",
+    "test": "bun test",
     "migrate": "node -e \"require('./db/migrate').runMigrations().then(() => process.exit(0))\"",
     "migrate-data": "node db/migrate-json-data.js",
     "db-status": "node -e \"require('./db/migrate').getMigrationStatus().then(status => { console.log(JSON.stringify(status, null, 2)); process.exit(0); })\"",

@@ -114,10 +114,32 @@ async function upsertSprints(sprints) {
   return { count, errors: errors.length };
 }
 
+function resolveAppEnv() {
+  const env = process.env.APP_ENV || process.env.ENVIRONMENT || (process.env.NODE_ENV === 'production' ? 'production' : 'staging');
+  return env.toLowerCase();
+}
+
+function isForceSeed() {
+  return process.env.FORCE_SEED === '1' || process.env.FORCE_SEED === 'true';
+}
+
 (async () => {
+  const appEnv = resolveAppEnv();
   console.log('[seed-sprints] Starting sprint seeding...');
 
   try {
+    if (appEnv === 'staging' && !isForceSeed()) {
+      try {
+        const count = await prisma.sprint.count();
+        if (count > 0) {
+          console.log('[seed-sprints] Staging already has sprints, skipping.');
+          process.exit(0);
+        }
+      } catch (e) {
+        // DB/table may not exist yet - continue to upsert (will fail with clear message)
+      }
+    }
+
     const sprints = loadSprintsData();
     console.log(`[seed-sprints] Loaded ${sprints.length} sprint(s) from sprints.json`);
 

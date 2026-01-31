@@ -5,6 +5,7 @@ const { UsersRepository } = require('../db/repository');
 const {
   DISCIPLINES_FILE,
   readSprints,
+  readCurrentState,
   findCurrentSprint,
   findNextSprint,
   loadJSON
@@ -425,12 +426,90 @@ async function buildAdminUsersModalView() {
   };
 }
 
+const ROLES_ORDER = ['account', 'producer', 'po', 'uiEng', 'beEng'];
+const ROLE_LABELS = { account: 'Account', producer: 'Producer', po: 'PO', uiEng: 'UI Engineer', beEng: 'BE Engineer' };
+const UNASSIGNED_VALUE = '__none__';
+
+/**
+ * Build modal for admins to change on-call participants for the current sprint.
+ * One static_select per role (Account, Producer, PO, UI Engineer, BE Engineer).
+ */
+async function buildAdminOnCallModalView() {
+  const [currentState, currentSprint] = await Promise.all([
+    readCurrentState(),
+    findCurrentSprint()
+  ]);
+
+  const blocks = [
+    { type: 'header', text: { type: 'plain_text', text: 'Change on-call' } },
+    { type: 'divider' }
+  ];
+
+  if (!currentSprint || !Number.isFinite(Number(currentSprint.index))) {
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: 'No current sprint found. On-call can only be changed for the active sprint.' }
+    });
+    return {
+      type: 'modal',
+      callback_id: 'admin_change_oncall_modal',
+      title: { type: 'plain_text', text: 'Change on-call' },
+      close: { type: 'plain_text', text: 'Close' },
+      blocks
+    };
+  }
+
+  const sprintLabel = currentSprint.sprintName || `Sprint ${currentSprint.index}`;
+  blocks.push({
+    type: 'context',
+    elements: [{ type: 'mrkdwn', text: `Current sprint: *${sprintLabel}*` }]
+  });
+
+  for (const role of ROLES_ORDER) {
+    const { active } = await getDisciplineMembersIncludingInactive(role);
+    const options = [
+      { text: { type: 'plain_text', text: 'Unassigned' }, value: UNASSIGNED_VALUE }
+    ];
+    const currentSlackId = currentState[role] || null;
+    let initialOption = options[0];
+
+    for (const u of active) {
+      options.push({ text: { type: 'plain_text', text: u.name || u.slackId }, value: u.slackId });
+      if (u.slackId === currentSlackId) {
+        initialOption = { text: { type: 'plain_text', text: u.name || u.slackId }, value: u.slackId };
+      }
+    }
+
+    blocks.push({
+      type: 'section',
+      block_id: `oncall_${role}`,
+      text: { type: 'mrkdwn', text: `*${ROLE_LABELS[role]}*` },
+      accessory: {
+        type: 'static_select',
+        action_id: `oncall_${role}_select`,
+        options,
+        initial_option: initialOption
+      }
+    });
+  }
+
+  return {
+    type: 'modal',
+    callback_id: 'admin_change_oncall_modal',
+    title: { type: 'plain_text', text: 'Change on-call' },
+    submit: { type: 'plain_text', text: 'Save' },
+    close: { type: 'plain_text', text: 'Cancel' },
+    blocks
+  };
+}
+
 module.exports = {
   DISCIPLINE_OPTIONS,
   getDisciplinesSourceFile,
   buildConfirm,
   buildAdminDisciplinesModalView,
   buildAdminSprintsModalView,
-  buildAdminUsersModalView
+  buildAdminUsersModalView,
+  buildAdminOnCallModalView
 };
 

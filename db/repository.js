@@ -599,7 +599,7 @@ const OverridesRepository = {
   },
 
   /**
-   * Decline an override (remove it)
+   * Decline an override (remove it) — only deletes rows where approved = false.
    */
   async declineOverride(sprintIndex, role, requestedBy, replacementSlackId, declinedBy) {
     return await transaction(async (client) => {
@@ -621,6 +621,28 @@ const OverridesRepository = {
       
       await logAudit('overrides', oldOverride.rows[0].id, 'DELETE', 
         oldOverride.rows[0], null, declinedBy, 'Override declined');
+      
+      return true;
+    });
+  },
+
+  /**
+   * Delete an override by id (admin remove) — deletes regardless of approved status.
+   */
+  async deleteOverrideById(overrideId, deletedBy) {
+    return await transaction(async (client) => {
+      const oldOverride = await client.query(`
+        SELECT * FROM overrides WHERE id = $1
+      `, [overrideId]);
+      
+      if (oldOverride.rows.length === 0) {
+        return false;
+      }
+      
+      await client.query(`DELETE FROM overrides WHERE id = $1`, [overrideId]);
+      
+      await logAudit('overrides', overrideId, 'DELETE', 
+        oldOverride.rows[0], null, deletedBy, 'Override removed by admin');
       
       return true;
     });

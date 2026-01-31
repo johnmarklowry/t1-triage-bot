@@ -12,3 +12,5 @@ currentState.json
 .env.staging
 # Keep env.example as it's a template
 !env.example
+
+.npm-cache/

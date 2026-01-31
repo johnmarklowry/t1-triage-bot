@@ -55,6 +55,16 @@ slackApp.command(getEnvironmentCommand('triage-schedule'), async ({ command, ack
 - `adminCommands.js` - Updated to use environment-specific commands
 - `overrideHandler.js` - Updated to use environment-specific commands
 
+## Seeding and Staging
+
+In staging, the server and Prisma seed scripts (`prisma:seed`, `prisma:seed:users`, `prisma:seed:sprints`) skip re-seeding when the relevant tables already have rows. To force a full re-seed (e.g. after a schema or data change), set:
+
+```bash
+FORCE_SEED=1
+```
+
+This applies to server startup (JSON migration) and to manual seed script runs.
+
 ## Configuration
 
 To configure the staging environment, set one of these environment variables:

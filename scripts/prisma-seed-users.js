@@ -126,11 +126,27 @@ async function upsertUsers(disciplines) {
   return { totalUsers, errors: errors.length, disciplines: Object.keys(disciplines).length };
 }
 
+function isForceSeed() {
+  return process.env.FORCE_SEED === '1' || process.env.FORCE_SEED === 'true';
+}
+
 (async () => {
   const appEnv = resolveAppEnv();
   console.log(`[seed-users] Starting user seeding for env=${appEnv}...`);
 
   try {
+    if (appEnv === 'staging' && !isForceSeed()) {
+      try {
+        const count = await prisma.user.count();
+        if (count > 0) {
+          console.log('[seed-users] Staging already has users, skipping.');
+          process.exit(0);
+        }
+      } catch (e) {
+        // DB/table may not exist yet - continue to upsert (will fail with clear message)
+      }
+    }
+
     const disciplines = loadDisciplinesData(appEnv);
     console.log(`[seed-users] Loaded disciplines: ${Object.keys(disciplines).join(', ')}`);
 

@@ -944,7 +944,11 @@ slackApp.view('admin_change_oncall_modal', async ({ ack, body, view, client, log
     }
   } catch (error) {
     logger?.error?.('[admin_change_oncall_modal] Error:', error);
-    await ack();
+    const message = (error?.message && error.message.length <= 80) ? error.message : 'Something went wrong. Please try again.';
+    await ack({
+      response_action: 'errors',
+      errors: { oncall_account: message }
+    });
   }
 });
 

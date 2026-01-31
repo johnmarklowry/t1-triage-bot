@@ -22,6 +22,7 @@ const {
   getTodayPT,
   formatSprintRangePT,
   formatSprintLabelPT,
+  getRoleAndDisciplinesForUser,
   OVERRIDES_FILE
 } = require('./dataUtils');
 
@@ -1696,12 +1697,13 @@ slackApp.action('request_coverage_from_home', async ({ ack, body, client, logger
       return;
     }
     
-    // Import override modal builder
+    // Resolve role and disciplines from same source as app (DB when USE_DATABASE)
+    const { role, disciplines } = await getRoleAndDisciplinesForUser(userId);
     const { buildOverrideRequestModal, buildOverrideRequestModalForSprint, buildMinimalDebugModal } = require('./overrideModal');
     const modalView =
       Number.isFinite(sprintIndex)
-        ? buildOverrideRequestModalForSprint(userId, sprintIndex)
-        : buildOverrideRequestModal(userId);
+        ? buildOverrideRequestModalForSprint(userId, sprintIndex, { role, disciplines })
+        : buildOverrideRequestModal(userId, { role, disciplines });
     
     const triggerId = body.trigger_id;
     const minimalView = buildMinimalDebugModal({

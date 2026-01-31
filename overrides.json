@@ -53,5 +53,38 @@
     "timestamp": "2026-01-18T23:10:13.306Z",
     "approvedBy": "U03BLBAESRF",
     "approvalTimestamp": "2026-01-18T23:10:22.036Z"
+  },
+  {
+    "sprintIndex": 0,
+    "role": "uiEng",
+    "newSlackId": "U0A9MQPT2Q3",
+    "newName": "Test User 9",
+    "requestedBy": "U03BLBAESRF",
+    "approved": true,
+    "timestamp": "2026-01-31T14:50:38.532Z",
+    "approvedBy": "U03BLBAESRF",
+    "approvalTimestamp": "2026-01-31T14:50:46.163Z"
+  },
+  {
+    "sprintIndex": 0,
+    "role": "uiEng",
+    "newSlackId": "U0A9MQPT2Q3",
+    "newName": "Test User 9",
+    "requestedBy": "U03BLBAESRF",
+    "approved": true,
+    "timestamp": "2026-01-31T14:54:00.887Z",
+    "approvedBy": "U03BLBAESRF",
+    "approvalTimestamp": "2026-01-31T14:54:10.891Z"
+  },
+  {
+    "sprintIndex": 0,
+    "role": "uiEng",
+    "newSlackId": "U0A9MQPT2Q3",
+    "newName": "Test User 9",
+    "requestedBy": "U03BLBAESRF",
+    "approved": true,
+    "timestamp": "2026-01-31T14:56:18.651Z",
+    "approvedBy": "U03BLBAESRF",
+    "approvalTimestamp": "2026-01-31T14:56:26.596Z"
   }
 ]

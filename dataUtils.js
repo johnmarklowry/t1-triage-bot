@@ -345,6 +345,28 @@ async function readDisciplines() {
 }
 
 /**
+ * Get the user's role (discipline) and full disciplines map for override modal context.
+ * Uses readDisciplines() so DB or file is the single source of truth.
+ */
+async function getRoleAndDisciplinesForUser(userId) {
+  const disciplines = await readDisciplines();
+  let role = null;
+  for (const r of Object.keys(disciplines || {})) {
+    const list = disciplines[r];
+    if (Array.isArray(list)) {
+      for (const userObj of list) {
+        if (userObj && userObj.slackId === userId) {
+          role = r;
+          break;
+        }
+      }
+    }
+    if (role) break;
+  }
+  return { role, disciplines: disciplines || {} };
+}
+
+/**
  * Get the current state from database
  */
 async function readCurrentState() {
@@ -602,19 +624,22 @@ async function getUserForSprintAndRole(sprintIndex, role, disciplines, overrides
  * Gets the user mapping for a specific sprint index
  * This is the single source of truth for who should be on call.
  * For the current sprint, persisted current_state wins so admin on-call overrides and rotation list stay in sync.
+ * @param {number} sprintIndex - Sprint index
+ * @param {{ usePersistedForCurrentSprint?: boolean }} [options] - When usePersistedForCurrentSprint is false, skip persisted state and compute from overrides+rotation (e.g. after approval so we detect the change).
  */
-async function getSprintUsers(sprintIndex) {
+async function getSprintUsers(sprintIndex, options = {}) {
   const idx = Number.parseInt(String(sprintIndex), 10);
   const cacheKey = Number.isFinite(idx) ? `sprintUsers:${idx}` : null;
+  const usePersistedForCurrentSprint = options.usePersistedForCurrentSprint !== false;
 
-  if (cacheKey) {
+  if (cacheKey && usePersistedForCurrentSprint) {
     const cached = await cache.getJson(cacheKey);
     if (cached) return cached;
   }
 
   const dateBasedSprint = await findCurrentSprint();
   const isCurrentSprint = dateBasedSprint != null && Number.isFinite(Number(dateBasedSprint.index)) && Number(idx) === Number(dateBasedSprint.index);
-  if (isCurrentSprint) {
+  if (isCurrentSprint && usePersistedForCurrentSprint) {
     const persisted = await readCurrentState();
     if (persisted && Number(persisted.sprintIndex) === Number(idx)) {
       const fromPersisted = {
@@ -752,6 +777,7 @@ module.exports = {
   saveJSON,
   readSprints,
   readDisciplines,
+  getRoleAndDisciplinesForUser,
   readCurrentState,
   saveCurrentState,
   readOverrides,

@@ -9,7 +9,7 @@ const { slackApp, receiver, publishAppHomeForUser } = require('./appHome');
 const { getEnvironmentCommand } = require('./commandUtils');
 const { buildOverrideRequestModal, buildOverrideStep2Modal, buildMinimalDebugModal } = require('./overrideModal');
 const cache = require('./cache/redisClient');
-const { findCurrentSprint, getSprintUsers, readSprints } = require('./dataUtils');
+const { findCurrentSprint, getSprintUsers, readSprints, getRoleAndDisciplinesForUser } = require('./dataUtils');
 const { applyCurrentSprintRotation } = require('./triageLogic');
 const { isUserInAdminChannel, DEFAULT_TTL_MS } = require('./services/adminMembership');
 
@@ -332,11 +332,11 @@ slackApp.command(getEnvironmentCommand('triage-override'), async ({ command, ack
     command?.interactivity_pointer ||
     null;
 
-  // Determine user's role
-  const userRole = await getUserRole(command.user_id);
+  // Resolve role and disciplines from same source as app (DB when USE_DATABASE)
+  const { role, disciplines } = await getRoleAndDisciplinesForUser(command.user_id);
 
   // Build the modal for requesting an override
-  const modalView = buildOverrideRequestModal(command.user_id);
+  const modalView = buildOverrideRequestModal(command.user_id, { role, disciplines });
 
   try {
     // Open minimal probe first, then update to the real modal.
@@ -380,7 +380,8 @@ slackApp.shortcut('request_coverage_shortcut', async ({ shortcut, ack, client, l
   await ack();
   try {
     const userId = shortcut.user.id;
-    const modalView = buildOverrideRequestModal(userId);
+    const { role, disciplines } = await getRoleAndDisciplinesForUser(userId);
+    const modalView = buildOverrideRequestModal(userId, { role, disciplines });
     const probeView = buildMinimalDebugModal({
       title: 'Request Coverage',
       bodyText: 'Opening coverage request…',
@@ -675,12 +676,12 @@ slackApp.view('override_request_modal', async ({ ack, body, view, client, logger
    Action: approve_override
    (Admin channel flow)
    ========================= */
-slackApp.action('approve_override', async ({ ack, body, client, logger }) => {
+async function handleApproveOverride({ ack, body, client, logger }) {
   await ack();
   try {
     const overrideInfo = JSON.parse(body.actions[0].value);
     const sprintLabel = overrideInfo.sprintLabel || formatSprintLabel(overrideInfo.sprintIndex);
-    
+
     const result = await approveOverride(
       overrideInfo.sprintIndex,
       overrideInfo.role,
@@ -688,7 +689,7 @@ slackApp.action('approve_override', async ({ ack, body, client, logger }) => {
       overrideInfo.replacementSlackId,
       body.user.id
     );
-    
+
     if (result) {
       // Notify the requester and replacement
       await client.chat.postMessage({
@@ -699,7 +700,7 @@ slackApp.action('approve_override', async ({ ack, body, client, logger }) => {
         channel: overrideInfo.replacementSlackId,
         text: `You have been approved as the replacement for ${overrideInfo.role} on ${sprintLabel}.`
       });
-      
+
       // Update the admin channel message
       await client.chat.update({
         channel: body.channel.id,
@@ -751,7 +752,8 @@ slackApp.action('approve_override', async ({ ack, body, client, logger }) => {
   } catch (error) {
     logger.error("Error approving override:", error);
   }
-});
+}
+slackApp.action('approve_override', handleApproveOverride);
 
 /* =========================
    Action: decline_override
@@ -1056,4 +1058,4 @@ slackApp.action('admin_remove_override', async ({ ack, body, client, logger }) =
   }
 });
 
-module.exports = {};
+module.exports = { buildOverrideListModal, handleApproveOverride };

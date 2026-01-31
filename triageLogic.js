@@ -333,7 +333,8 @@ async function applyCurrentSprintRotation() {
       return { updated: false, affectedUserIds: [] };
     }
     const oldState = await readCurrentState();
-    const newRoles = await getSprintUsers(currentSprint.index);
+    // Use calculated roles (overrides + rotation) so we detect approved-override changes; skip persisted state for this comparison.
+    const newRoles = await dataUtilsGetSprintUsers(currentSprint.index, { usePersistedForCurrentSprint: false });
     const changes = diffRoles(oldState, newRoles);
     if (changes.length === 0) {
       return { updated: false, affectedUserIds: [] };

@@ -70,9 +70,9 @@ This applies to server startup (JSON migration) and to manual seed script runs.
 The bot updates a Slack user group with the current on-call participants (rotation, overrides, admin changes). Production and staging use different groups so staging/testing never modifies the production on-call group.
 
 - **Production:** Set `SLACK_USERGROUP_ID` to your production on-call user group ID (format like `S01234567`).
-- **Staging / local dev:** Set `SLACK_USERGROUP_ID_STAGING` to a **separate** Slack user group used only for staging. When `APP_ENV=staging` or `ENVIRONMENT=staging`, the bot updates only this group and never touches `SLACK_USERGROUP_ID`. If `SLACK_USERGROUP_ID_STAGING` is unset in staging, the bot skips the update and logs a warning.
+- **Staging / local dev:** When `APP_ENV=staging` or `ENVIRONMENT=staging`, the bot updates only a staging group and never touches `SLACK_USERGROUP_ID`. If `SLACK_USERGROUP_ID_STAGING` is **set**, the bot uses that ID. If **unset**, the bot tries to find or create a user group with handle `triage-oncall-staging` (name "Triage On-Call (Staging)") and use it for on-call updates. Setting `SLACK_USERGROUP_ID_STAGING` is optional and overrides the auto-created/found group.
 
-**Staging setup:** In your Slack workspace (e.g. Teamone), create a new user group for staging on-call (e.g. "Triage On-Call (Staging)" or "lcom-triage-oncall-staging"). Obtain its ID (from the group’s link or via Slack API) and set `SLACK_USERGROUP_ID_STAGING` in your staging or local env.
+**Slack scopes:** Staging auto-create and updates require **`usergroups:write`** (create) and **`usergroups.users:write`** (update members). If the bot lacks `usergroups:write`, staging will only work when `SLACK_USERGROUP_ID_STAGING` is set to an existing group. The workspace must allow the app to manage user groups (Slack: Workspace settings > Permissions > User Groups); otherwise the API returns `permission_denied`.
 
 ## Configuration
 

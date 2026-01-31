@@ -600,7 +600,8 @@ async function getUserForSprintAndRole(sprintIndex, role, disciplines, overrides
 
 /**
  * Gets the user mapping for a specific sprint index
- * This is the single source of truth for who should be on call
+ * This is the single source of truth for who should be on call.
+ * For the current sprint, persisted current_state wins so admin on-call overrides and rotation list stay in sync.
  */
 async function getSprintUsers(sprintIndex) {
   const idx = Number.parseInt(String(sprintIndex), 10);
@@ -609,6 +610,26 @@ async function getSprintUsers(sprintIndex) {
   if (cacheKey) {
     const cached = await cache.getJson(cacheKey);
     if (cached) return cached;
+  }
+
+  const dateBasedSprint = await findCurrentSprint();
+  const isCurrentSprint = dateBasedSprint != null && Number.isFinite(Number(dateBasedSprint.index)) && Number(idx) === Number(dateBasedSprint.index);
+  if (isCurrentSprint) {
+    const persisted = await readCurrentState();
+    if (persisted && Number(persisted.sprintIndex) === Number(idx)) {
+      const fromPersisted = {
+        account: persisted.account ?? null,
+        producer: persisted.producer ?? null,
+        po: persisted.po ?? null,
+        uiEng: persisted.uiEng ?? null,
+        beEng: persisted.beEng ?? null
+      };
+      const hasAny = [fromPersisted.account, fromPersisted.producer, fromPersisted.po, fromPersisted.uiEng, fromPersisted.beEng].some(Boolean);
+      if (hasAny) {
+        if (cacheKey) await cache.setJson(cacheKey, fromPersisted, CACHE_TTLS.sprintUsers);
+        return fromPersisted;
+      }
+    }
   }
 
   const disciplines = await readDisciplines();
@@ -714,36 +735,13 @@ async function refreshCurrentState() {
       console.log('[refreshCurrentState] Corrected sprint index by date:', { from: current.sprintIndex, to: dateBasedIndex });
       return true;
     }
+    // Same sprint as today: do not overwrite persisted state with schedule-based calculation.
+    // Trust persisted state so admin on-call overrides are preserved (topic, rotation list, modal stay in sync).
+    console.log('[refreshCurrentState] State is already up to date (current sprint, trusting persisted state)');
+    return false;
   }
 
-  // Get what the users SHOULD be based on calculation
-  const calculatedUsers = await getSprintUsers(current.sprintIndex);
-  
-  // Check if they match current state
-  let needsUpdate = false;
-  const updates = [];
-  
-  ['account', 'producer', 'po', 'uiEng', 'beEng'].forEach(role => {
-    if (current[role] !== calculatedUsers[role]) {
-      needsUpdate = true;
-      updates.push({
-        role,
-        from: current[role],
-        to: calculatedUsers[role]
-      });
-    }
-  });
-  
-  if (needsUpdate) {
-    console.log('[refreshCurrentState] State needs update:', updates);
-    const newState = {
-      sprintIndex: current.sprintIndex,
-      ...calculatedUsers
-    };
-    await saveCurrentState(newState);
-    return true;
-  }
-  
+  // No date-based current sprint (e.g. between sprints): leave state as is
   console.log('[refreshCurrentState] State is already up to date');
   return false;
 }

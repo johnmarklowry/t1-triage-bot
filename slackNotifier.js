@@ -65,15 +65,25 @@ async function updateChannelTopic(userIdsArray) {
 
 /**
  * Updates the Slack user group for on-call members.
+ * In staging (APP_ENV/ENVIRONMENT=staging), uses SLACK_USERGROUP_ID_STAGING only; never updates production group.
  */
 async function updateOnCallUserGroup(userIdsArray) {
-  if (!process.env.SLACK_USERGROUP_ID) {
-    console.warn('[updateOnCallUserGroup] SLACK_USERGROUP_ID is missing. Skipping update.');
+  const isStaging = process.env.APP_ENV === 'staging' || process.env.ENVIRONMENT === 'staging' || process.env.NODE_ENV === 'staging';
+  const usergroupId = isStaging
+    ? process.env.SLACK_USERGROUP_ID_STAGING
+    : process.env.SLACK_USERGROUP_ID;
+
+  if (!usergroupId) {
+    if (isStaging) {
+      console.warn('[updateOnCallUserGroup] Staging: SLACK_USERGROUP_ID_STAGING is missing. Skipping update (production group is never updated from staging).');
+    } else {
+      console.warn('[updateOnCallUserGroup] SLACK_USERGROUP_ID is missing. Skipping update.');
+    }
     return;
   }
   try {
     await slackClient.usergroups.users.update({
-      usergroup: process.env.SLACK_USERGROUP_ID,
+      usergroup: usergroupId,
       users: userIdsArray.join(',')
     });
     console.log('[updateOnCallUserGroup] User group updated successfully.');

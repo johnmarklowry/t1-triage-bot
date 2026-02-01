@@ -6,7 +6,7 @@ const { railwayCronSecret } = require('../config');
 // Ensure JSON bodies are parsed for Railway webhook requests.
 router.use(express.json());
 
-router.post('/railway/notify-rotation', async (req, res) => {
+async function railwayNotifyRotationHandler(req, res) {
   try {
     if (railwayCronSecret) {
       const signature = req.get('X-Railway-Cron-Signature');
@@ -30,7 +30,10 @@ router.post('/railway/notify-rotation', async (req, res) => {
       message: error.message,
     });
   }
-});
+}
+
+router.post('/railway/notify-rotation', railwayNotifyRotationHandler);
 
 module.exports = router;
+module.exports.railwayNotifyRotationHandler = railwayNotifyRotationHandler;
 

@@ -40,15 +40,36 @@ mock.module('../../services/notifications/weekdayPolicy', () => ({
   nextBusinessDay: (d) => d,
 }));
 
-const request = require('supertest');
-const express = require('express');
-const railwayCronRouter = require('../../routes/railwayCron');
+const { railwayNotifyRotationHandler } = require('../../routes/railwayCron');
+
+function makeReq(opts = {}) {
+  const headers = opts.headers || {};
+  return {
+    get(name) {
+      return headers[name] || headers[name.toLowerCase()];
+    },
+    body: opts.body || {},
+  };
+}
+
+function makeRes() {
+  let statusCode;
+  let body;
+  return {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    json(obj) {
+      body = obj;
+      return this;
+    },
+    getStatus: () => statusCode,
+    getBody: () => body,
+  };
+}
 
 describe('POST /railway/notify-rotation', () => {
-  const app = express();
-  app.use(express.json());
-  app.use('/jobs', railwayCronRouter);
-
   beforeEach(() => {
     mock.clearAllMocks();
     getCronTriggerAudit.mockResolvedValue(null);
@@ -59,7 +80,11 @@ describe('POST /railway/notify-rotation', () => {
   });
 
   it('rejects requests without a valid signature when secret configured', async () => {
-    await request(app).post('/jobs/railway/notify-rotation').expect(401);
+    const req = makeReq();
+    const res = makeRes();
+    await railwayNotifyRotationHandler(req, res);
+    expect(res.getStatus()).toBe(401);
+    expect(res.getBody().status).toBe('unauthorized');
   });
 
   it('skips notification when assignments hash matches latest snapshot', async () => {
@@ -75,18 +100,17 @@ describe('POST /railway/notify-rotation', () => {
       },
     });
 
-    const response = await request(app)
-      .post('/jobs/railway/notify-rotation')
-      .set('X-Railway-Cron-Signature', 'test-secret')
-      .send({
-        trigger_id: 'abc-123',
-        scheduled_at: '2025-11-10T16:00:00Z',
-      })
-      .expect(202);
+    const req = makeReq({
+      headers: { 'X-Railway-Cron-Signature': 'test-secret' },
+      body: { trigger_id: 'abc-123', scheduled_at: '2025-11-10T16:00:00Z' },
+    });
+    const res = makeRes();
+    await railwayNotifyRotationHandler(req, res);
 
-    expect(response.body.result).toBe('skipped');
-    expect(response.body.notifications_sent).toBe(0);
-    expect(response.body.snapshot_id).toBe(42);
+    expect(res.getStatus()).toBe(202);
+    expect(res.getBody().result).toBe('skipped');
+    expect(res.getBody().notifications_sent).toBe(0);
+    expect(res.getBody().snapshot_id).toBe(42);
     expect(notifyUser).not.toHaveBeenCalled();
   });
 
@@ -110,18 +134,32 @@ describe('POST /railway/notify-rotation', () => {
       message: 'notifications sent',
     });
 
-    const response = await request(app)
-      .post('/jobs/railway/notify-rotation')
-      .set('X-Railway-Cron-Signature', 'test-secret')
-      .send({
-        trigger_id: 'def-456',
-        scheduled_at: '2025-11-10T16:00:00Z',
-      })
-      .expect(202);
+    const req = makeReq({
+      headers: { 'X-Railway-Cron-Signature': 'test-secret' },
+      body: { trigger_id: 'def-456', scheduled_at: '2025-11-10T16:00:00Z' },
+    });
+    const res = makeRes();
+    await railwayNotifyRotationHandler(req, res);
 
-    expect(response.body.result).toBe('delivered');
-    expect(response.body.notifications_sent).toBe(2);
-    expect(response.body.snapshot_id).toBe(42);
+    expect(res.getStatus()).toBe(202);
+    expect(res.getBody().result).toBe('delivered');
+    expect(res.getBody().notifications_sent).toBe(2);
+    expect(res.getBody().snapshot_id).toBe(42);
     expect(saveSnapshot).toHaveBeenCalled();
+  });
+
+  it('returns 500 and message when handleRailwayNotification throws', async () => {
+    getNotificationAssignments.mockRejectedValue(new Error('job failed'));
+
+    const req = makeReq({
+      headers: { 'X-Railway-Cron-Signature': 'test-secret' },
+      body: { trigger_id: 'err-1', scheduled_at: '2025-11-10T16:00:00Z' },
+    });
+    const res = makeRes();
+    await railwayNotifyRotationHandler(req, res);
+
+    expect(res.getStatus()).toBe(500);
+    expect(res.getBody().status).toBe('error');
+    expect(res.getBody().message).toBe('job failed');
   });
 });

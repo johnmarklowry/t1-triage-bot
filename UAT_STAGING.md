@@ -1,5 +1,7 @@
 # UAT (Staging) — NATE Triage Team Bot (Teamone)
 
+**Playwright e2e:** Automated e2e runs against Slack (staging). Run `npm run test:e2e` (after `npm run test:e2e:auth` once) before promoting to production. See `tests/e2e/README.md` for setup and CI notes.
+
 ## Scope (excluding the new RCA feature)
 
 - **Environment**: Staging

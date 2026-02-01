@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "bun --watch --inspect server.js",
-    "test": "bun test",
+    "test": "bun test tests/unit/aaa-repository.overrides.test.js && bun test tests/unit/triageLogic.overrides.test.js && bun test --serial tests/unit/overrideHandler.list.test.js tests/unit/overrideModal.overrides.test.js tests/unit/zzz-dataUtils.overrides.test.js tests/integration",
     "migrate": "node -e \"require('./db/migrate').runMigrations().then(() => process.exit(0))\"",
     "migrate-data": "node db/migrate-json-data.js",
     "db-status": "node -e \"require('./db/migrate').getMigrationStatus().then(status => { console.log(JSON.stringify(status, null, 2)); process.exit(0); })\"",
@@ -18,7 +18,10 @@
     "prisma:seed": "node scripts/prisma-seed.js",
     "prisma:seed:sprints": "node scripts/prisma-seed-sprints.js",
     "prisma:seed:users": "node scripts/prisma-seed-users.js",
-    "prisma:list:sprints": "node scripts/list-sprints-db.js"
+    "prisma:list:sprints": "node scripts/list-sprints-db.js",
+    "test:e2e": "bunx playwright test --config=playwright.e2e-only.config.js",
+    "test:e2e:ui": "bunx playwright test --ui",
+    "test:e2e:auth": "bunx playwright test --project=setup"
   },
   "dependencies": {
     "@fastify/formbody": "^7.4.0",
@@ -52,6 +55,7 @@
     "railway"
   ],
   "devDependencies": {
+    "@playwright/test": "^1.49.0",
     "supertest": "^7.1.4"
   }
 }

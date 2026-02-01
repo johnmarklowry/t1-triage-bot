@@ -10,7 +10,13 @@ currentState.json
 .env.development
 .env.production
 .env.staging
+.env.e2e
 # Keep env.example as it's a template
 !env.example
 
 .npm-cache/
+
+# Playwright e2e auth state (contains cookies; do not commit)
+tests/e2e/.auth/
+playwright-report/
+test-results/

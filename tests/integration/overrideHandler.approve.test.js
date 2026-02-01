@@ -7,7 +7,7 @@ const publishAppHomeForUserMock = mock();
 
 mock.module('../../loadEnv', () => ({ loadEnv: () => {} }));
 mock.module('../../appHome', () => ({
-  slackApp: { action: () => {}, view: () => {}, command: () => {} },
+  slackApp: { action: () => {}, view: () => {}, command: () => {}, shortcut: () => {}, options: () => {} },
   receiver: {},
   publishAppHomeForUser: publishAppHomeForUserMock,
 }));
@@ -42,6 +42,10 @@ mock.module('../../db/repository', () => ({
   },
 }));
 
+// Force fresh load so overrideHandler uses our mocked triageLogic/appHome
+if (typeof require.cache !== 'undefined') {
+  delete require.cache[require.resolve('../../overrideHandler')];
+}
 const { handleApproveOverride } = require('../../overrideHandler');
 
 describe('overrideHandler approve_override', () => {

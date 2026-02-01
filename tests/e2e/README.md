@@ -40,6 +40,10 @@ After auth state exists:
 npm run test:e2e
 ```
 
+(or `bun run test:e2e` — the script runs the Playwright CLI with **Node** to avoid a Bun + source-map column error.)
+
+**Do not run e2e specs with `bun test`** — they are Playwright-only and will fail under Bun’s runner. Use `npm run test` (or `bun test tests/unit tests/integration`) for unit and integration tests.
+
 This runs the slack-e2e project (full smoke suite: App Home, slash commands, admin UIs, validation).
 
 To confirm Playwright discovers tests without running them:
@@ -84,4 +88,4 @@ Current smoke suite (UAT-003, 004, 007, 008, 011, 015, 016, 018, 022, 023):
 - **UAT-016:** `/admin-disciplines-staging` opens admin disciplines UI (admin channel).
 - **UAT-018:** `/admin-users-staging` opens user management UI (admin channel).
 
-Slack’s DOM can change; if selectors break, update `tests/e2e/slack/app-home.spec.js` (prefer `getByRole` and `getByText`). More scenarios from `UAT_STAGING.md` can be added under `tests/e2e/slack/`.
+Slack’s DOM can change; if selectors break, update `tests/e2e/slack/app-home.e2e.js` (prefer `getByRole` and `getByText`). More scenarios from `UAT_STAGING.md` can be added under `tests/e2e/slack/`. Use the `.e2e.js` extension so `bun test` does not discover these files.

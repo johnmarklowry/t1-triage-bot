@@ -40,7 +40,12 @@ mock.module('../../db/repository', () => ({
   },
 }));
 
-const dataUtils = require('../../dataUtils');
+// Force fresh load so we get real dataUtils with our db/repository mock (avoid cached dataUtils from other tests)
+const dataUtilsPath = require.resolve('../../dataUtils');
+if (typeof require.cache !== 'undefined') {
+  delete require.cache[dataUtilsPath];
+}
+const dataUtils = require(dataUtilsPath);
 
 describe('dataUtils override/coverage', () => {
   beforeEach(() => {

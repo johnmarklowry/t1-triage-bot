@@ -12,6 +12,7 @@ const notifyAdminsMock = mock();
 mock.module('../../dataUtils', () => ({
   readCurrentState: readCurrentStateMock,
   saveCurrentState: saveCurrentStateMock,
+  readOverrides: mock(() => Promise.resolve([])),
   getSprintUsers: getSprintUsersMock,
   findCurrentSprint: findCurrentSprintMock,
   findNextSprint: mock(() => Promise.resolve(null)),
@@ -29,6 +30,11 @@ mock.module('../../slackNotifier', () => ({
   notifyRotationChanges: notifyRotationChangesMock,
 }));
 
+// Force fresh load with mocks (avoid cached triageLogic from other test files)
+const triageLogicPath = require.resolve('../../triageLogic');
+if (typeof require.cache !== 'undefined') {
+  delete require.cache[triageLogicPath];
+}
 const { applyCurrentSprintRotation, setCurrentSprintRolesFromAdmin } = require('../../triageLogic');
 
 describe('triageLogic override/rotation', () => {

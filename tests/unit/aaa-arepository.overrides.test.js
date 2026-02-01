@@ -1,22 +1,38 @@
-const { describe, it, expect, mock, beforeEach } = require('bun:test');
+const { describe, it, expect, mock, beforeEach, beforeAll } = require('bun:test');
 
 const queryMock = mock();
 const transactionMock = mock();
 
-// Clear cache so we load real repository with our connection mock (avoids cached repo from other files)
-if (typeof require.cache !== 'undefined') {
-  delete require.cache[require.resolve('../../db/repository')];
-  delete require.cache[require.resolve('../../db/connection')];
+const connectionPath = require.resolve('../../db/connection');
+const repositoryPath = require.resolve('../../db/repository');
+
+// Reset before loading: clear cache and (re)apply our mocks so we get real repo + mocked connection.
+// Must run before require('../../db/repository') so we override any db/repository mock from other tests.
+function resetBeforeLoad() {
+  if (typeof require.cache !== 'undefined') {
+    delete require.cache[repositoryPath];
+    delete require.cache[connectionPath];
+  }
+  mock.module(connectionPath, () => ({
+    query: queryMock,
+    transaction: transactionMock,
+  }));
 }
 
-mock.module('../../db/connection', () => ({
-  query: queryMock,
-  transaction: transactionMock,
-}));
-
+resetBeforeLoad();
+// If another test (e.g. aaa-dataUtils) already mocked db/repository, we get that mock here.
+// To guarantee real repo, run this file first: `bun test tests/unit/aaa-arepository.overrides.test.js`
+// or use `bun run test` (see package.json).
 const { OverridesRepository } = require('../../db/repository');
 
 describe('OverridesRepository (mocked DB)', () => {
+  beforeAll(() => {
+    expect(OverridesRepository.getAll).toBeFunction();
+    expect(OverridesRepository.deleteOverrideById).toBeFunction();
+    expect(OverridesRepository.approveOverride).toBeFunction();
+    expect(OverridesRepository.declineOverride).toBeFunction();
+  });
+
   beforeEach(() => {
     mock.clearAllMocks();
   });

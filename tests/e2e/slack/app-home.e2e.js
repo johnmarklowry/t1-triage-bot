@@ -1,6 +1,7 @@
 // @ts-check
 // Smoke e2e: App Home, slash commands, override list, admin UIs, validation (UAT-003, 004, 007, 008, 011, 015, 016, 018, 022, 023).
 // Requires: staging bot deployed; run npm run test:e2e:auth once to save Slack login state.
+// File is named .e2e.js so Bun test does not discover it (Bun only matches .test., .spec., _test., _spec.).
 
 const { test, expect } = require('@playwright/test');
 
@@ -45,7 +46,6 @@ async function goToAppHome(page) {
 test.describe('Slack bot smoke (staging)', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto(WORKSPACE_URL);
-    // Ensure we're in the workspace (storage state should have us logged in)
     await expect(page).toHaveURL(/slack\.com/);
   });
 

@@ -38,7 +38,7 @@ const config = {
     {
       name: 'slack-e2e',
       testDir: path.join(__dirname, 'tests', 'e2e'),
-      testMatch: /\.spec\.(js|ts)$/,
+      testMatch: /\.(e2e|spec)\.(js|ts)$/,
       use: {
         storageState: storageStatePath,
       },

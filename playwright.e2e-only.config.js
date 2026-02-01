@@ -24,8 +24,8 @@ const config = {
   },
   timeout: 30000,
   expect: { timeout: 15000 },
-  // Match spec files under testDir; regex matches absolute path so must match filename part
-  testMatch: /\.spec\.(js|ts)$/,
+  // Match .e2e.js/.e2e.ts (and .spec for backwards compat); .e2e.* avoids Bun test discovery (*.spec.* is discovered by Bun)
+  testMatch: /\.(e2e|spec)\.(js|ts)$/,
   testIgnore: [],
   // Ensure e2e specs are discovered even if under ignored dirs (e.g. tests/e2e/.auth is ignored)
   respectGitIgnore: false,
@@ -33,7 +33,7 @@ const config = {
     {
       name: 'slack-e2e',
       testDir,
-      testMatch: /\.spec\.(js|ts)$/,
+      testMatch: /\.(e2e|spec)\.(js|ts)$/,
       use: {
         storageState: storageStatePath,
       },

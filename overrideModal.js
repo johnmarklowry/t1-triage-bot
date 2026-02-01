@@ -68,9 +68,10 @@ function getUserRole(userId) {
  * For the given requester (by Slack ID), build select options for each sprint
  * in which the requester is scheduled for the role.
  * Uses default rotation logic: assigned user = roleList[sprintIndex % roleList.length].
+ * Optional context: { role, disciplines } overrides file-based lookup (e.g. from DB).
  */
-function buildUserSprintOptions(requesterSlackId) {
-  const role = getUserRole(requesterSlackId);
+function buildUserSprintOptions(requesterSlackId, context = {}) {
+  const role = context.role ?? getUserRole(requesterSlackId);
   
   if (!role) {
     console.error(`Requester role not found for ${requesterSlackId}`);
@@ -83,8 +84,8 @@ function buildUserSprintOptions(requesterSlackId) {
     ];
   }
   const allSprints = getAllSprints();
-  const disciplines = getDisciplines();
-  const roleList = disciplines[role] || [];
+  const disciplines = context.disciplines ?? getDisciplines();
+  const roleList = Array.isArray(disciplines?.[role]) ? disciplines[role] : [];
   const options = [];
 
   // For each sprint, check if the rotation assigns the requester.
@@ -168,9 +169,10 @@ function buildMinimalDebugModal({
 /**
  * buildOverrideStep1Modal:
  * Step 1 (choose sprint). No submit button; selecting a sprint triggers views.update to Step 2.
+ * Optional context: { role, disciplines } overrides file-based lookup (e.g. from DB).
  */
-function buildOverrideStep1Modal(requesterSlackId) {
-  const role = getUserRole(requesterSlackId);
+function buildOverrideStep1Modal(requesterSlackId, context = {}) {
+  const role = context.role ?? getUserRole(requesterSlackId);
 
   if (!role) {
     return buildInfoModal({
@@ -183,7 +185,7 @@ function buildOverrideStep1Modal(requesterSlackId) {
   // Store role and requester in private_metadata so action handlers can build Step 2.
   const privateMetadata = JSON.stringify({ role, requester: requesterSlackId });
 
-  const sprintOptionsAll = buildUserSprintOptions(requesterSlackId);
+  const sprintOptionsAll = buildUserSprintOptions(requesterSlackId, context);
   if (sprintOptionsAll.length === 1 && sprintOptionsAll[0].value === "none") {
     return buildInfoModal({
       title: "Request Coverage",
@@ -249,11 +251,12 @@ function buildOverrideStep1Modal(requesterSlackId) {
  *
  * IMPORTANT: Keeps block_ids/action_ids stable so the existing view submission handler
  * (`override_request_modal`) can continue to read `view.state.values`.
+ * Optional context: { role, disciplines } for buildUserSprintOptions (e.g. from DB).
  */
-function buildOverrideStep2Modal({ requesterSlackId, role, sprintIndex }) {
+function buildOverrideStep2Modal({ requesterSlackId, role, sprintIndex, context = {} }) {
   const privateMetadata = JSON.stringify({ role, requester: requesterSlackId, sprintIndex });
 
-  const sprintOptionsAll = buildUserSprintOptions(requesterSlackId);
+  const sprintOptionsAll = buildUserSprintOptions(requesterSlackId, context);
   const sprintOptions = sprintOptionsAll.slice(0, 100);
 
   const initialOption =
@@ -327,16 +330,18 @@ function buildOverrideStep2Modal({ requesterSlackId, role, sprintIndex }) {
 }
 
 // Backwards compatible export name: existing callers open Step 1 first.
-function buildOverrideRequestModal(requesterSlackId) {
-  return buildOverrideStep1Modal(requesterSlackId);
+// Optional context: { role, disciplines } so modal uses same source as app (e.g. DB).
+function buildOverrideRequestModal(requesterSlackId, context = {}) {
+  return buildOverrideStep1Modal(requesterSlackId, context);
 }
 
 /**
  * buildOverrideRequestModalForSprint:
  * If we already know the sprintIndex (e.g., from App Home), go straight to Step 2 with sprint preselected.
+ * Optional context: { role, disciplines } overrides file-based lookup (e.g. from DB).
  */
-function buildOverrideRequestModalForSprint(requesterSlackId, sprintIndex) {
-  const role = getUserRole(requesterSlackId);
+function buildOverrideRequestModalForSprint(requesterSlackId, sprintIndex, context = {}) {
+  const role = context.role ?? getUserRole(requesterSlackId);
   const parsedSprintIndex = Number.parseInt(String(sprintIndex), 10);
 
   if (!role) {
@@ -348,10 +353,10 @@ function buildOverrideRequestModalForSprint(requesterSlackId, sprintIndex) {
   }
 
   if (!Number.isFinite(parsedSprintIndex)) {
-    return buildOverrideStep1Modal(requesterSlackId);
+    return buildOverrideStep1Modal(requesterSlackId, context);
   }
 
-  return buildOverrideStep2Modal({ requesterSlackId, role, sprintIndex: parsedSprintIndex });
+  return buildOverrideStep2Modal({ requesterSlackId, role, sprintIndex: parsedSprintIndex, context });
 }
 
 module.exports = {

@@ -257,4 +257,4 @@ slackApp.view('schedule_date_modal', async ({ ack, body, view, client, logger })
   }
 });
 
-module.exports = {};
+module.exports = { findSprintForDate, buildScheduleModal };

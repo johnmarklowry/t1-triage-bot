@@ -93,11 +93,27 @@ async function upsertDisciplines(appEnv, data) {
   return count;
 }
 
+function isForceSeed() {
+  return process.env.FORCE_SEED === '1' || process.env.FORCE_SEED === 'true';
+}
+
 (async () => {
   const appEnv = resolveAppEnv();
   console.log(`[seed] APP_ENV resolved to: ${appEnv}`);
 
   try {
+    if (appEnv === 'staging' && !isForceSeed()) {
+      try {
+        const count = await prisma.discipline.count();
+        if (count > 0) {
+          console.log('[seed] Staging already has disciplines, skipping.');
+          process.exit(0);
+        }
+      } catch (e) {
+        // DB/table may not exist yet - continue to upsert (will fail with clear message)
+      }
+    }
+
     const data = loadDisciplinesData(appEnv);
     const count = await upsertDisciplines(appEnv, data);
     console.log(`[seed] Upserted ${count} disciplines for env=${appEnv}`);

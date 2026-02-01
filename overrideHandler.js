@@ -5,10 +5,13 @@
 require('./loadEnv').loadEnv();
 const fs = require('fs');
 const path = require('path');
-const { slackApp, receiver } = require('./appHome');
+const { slackApp, receiver, publishAppHomeForUser } = require('./appHome');
 const { getEnvironmentCommand } = require('./commandUtils');
 const { buildOverrideRequestModal, buildOverrideStep2Modal, buildMinimalDebugModal } = require('./overrideModal');
 const cache = require('./cache/redisClient');
+const { findCurrentSprint, getSprintUsers, readSprints, getRoleAndDisciplinesForUser } = require('./dataUtils');
+const { applyCurrentSprintRotation } = require('./triageLogic');
+const { isUserInAdminChannel, DEFAULT_TTL_MS } = require('./services/adminMembership');
 
 // Import database repositories
 const { UsersRepository, OverridesRepository } = require('./db/repository');
@@ -329,11 +332,11 @@ slackApp.command(getEnvironmentCommand('triage-override'), async ({ command, ack
     command?.interactivity_pointer ||
     null;
 
-  // Determine user's role
-  const userRole = await getUserRole(command.user_id);
+  // Resolve role and disciplines from same source as app (DB when USE_DATABASE)
+  const { role, disciplines } = await getRoleAndDisciplinesForUser(command.user_id);
 
   // Build the modal for requesting an override
-  const modalView = buildOverrideRequestModal(command.user_id);
+  const modalView = buildOverrideRequestModal(command.user_id, { role, disciplines });
 
   try {
     // Open minimal probe first, then update to the real modal.
@@ -377,7 +380,8 @@ slackApp.shortcut('request_coverage_shortcut', async ({ shortcut, ack, client, l
   await ack();
   try {
     const userId = shortcut.user.id;
-    const modalView = buildOverrideRequestModal(userId);
+    const { role, disciplines } = await getRoleAndDisciplinesForUser(userId);
+    const modalView = buildOverrideRequestModal(userId, { role, disciplines });
     const probeView = buildMinimalDebugModal({
       title: 'Request Coverage',
       bodyText: 'Opening coverage request…',
@@ -672,12 +676,12 @@ slackApp.view('override_request_modal', async ({ ack, body, view, client, logger
    Action: approve_override
    (Admin channel flow)
    ========================= */
-slackApp.action('approve_override', async ({ ack, body, client, logger }) => {
+async function handleApproveOverride({ ack, body, client, logger }) {
   await ack();
   try {
     const overrideInfo = JSON.parse(body.actions[0].value);
     const sprintLabel = overrideInfo.sprintLabel || formatSprintLabel(overrideInfo.sprintIndex);
-    
+
     const result = await approveOverride(
       overrideInfo.sprintIndex,
       overrideInfo.role,
@@ -685,7 +689,7 @@ slackApp.action('approve_override', async ({ ack, body, client, logger }) => {
       overrideInfo.replacementSlackId,
       body.user.id
     );
-    
+
     if (result) {
       // Notify the requester and replacement
       await client.chat.postMessage({
@@ -696,7 +700,7 @@ slackApp.action('approve_override', async ({ ack, body, client, logger }) => {
         channel: overrideInfo.replacementSlackId,
         text: `You have been approved as the replacement for ${overrideInfo.role} on ${sprintLabel}.`
       });
-      
+
       // Update the admin channel message
       await client.chat.update({
         channel: body.channel.id,
@@ -718,22 +722,49 @@ slackApp.action('approve_override', async ({ ack, body, client, logger }) => {
           }
         ]
       });
+
+      // If override affects current sprint: sync state, user group, channel topic, notify, refresh App Home
+      try {
+        const currentSprint = await findCurrentSprint();
+        if (currentSprint && Number(overrideInfo.sprintIndex) === Number(currentSprint.index)) {
+          const { updated, affectedUserIds } = await applyCurrentSprintRotation();
+          if (updated) {
+            const newRoles = await getSprintUsers(currentSprint.index);
+            const onCallIds = Object.values(newRoles).filter(Boolean);
+            const toRefresh = new Set([
+              ...(affectedUserIds || []),
+              ...onCallIds,
+              body.user?.id
+            ].filter(Boolean));
+            for (const uid of toRefresh) {
+              try {
+                await publishAppHomeForUser(client, uid);
+              } catch (err) {
+                logger.error('[approve_override] Failed to refresh App Home for user:', uid, err);
+              }
+            }
+          }
+        }
+      } catch (syncErr) {
+        logger.error('[approve_override] Sync/refresh after approve failed:', syncErr);
+      }
     }
   } catch (error) {
     logger.error("Error approving override:", error);
   }
-});
+}
+slackApp.action('approve_override', handleApproveOverride);
 
 /* =========================
    Action: decline_override
    (Admin channel flow)
    ========================= */
-slackApp.action('decline_override', async ({ ack, body, client, logger }) => {
+async function handleDeclineOverride({ ack, body, client, logger }) {
   await ack();
   try {
     const overrideInfo = JSON.parse(body.actions[0].value);
     const sprintLabel = overrideInfo.sprintLabel || formatSprintLabel(overrideInfo.sprintIndex);
-    
+
     const result = await declineOverride(
       overrideInfo.sprintIndex,
       overrideInfo.role,
@@ -741,15 +772,13 @@ slackApp.action('decline_override', async ({ ack, body, client, logger }) => {
       overrideInfo.replacementSlackId,
       body.user.id
     );
-    
+
     if (result) {
-      // Notify the requester
       await client.chat.postMessage({
         channel: overrideInfo.requesterId,
         text: `Your override request for ${overrideInfo.role} on ${sprintLabel} has been declined.`
       });
-      
-      // Update the admin channel message
+
       await client.chat.update({
         channel: body.channel.id,
         ts: body.message.ts,
@@ -774,7 +803,8 @@ slackApp.action('decline_override', async ({ ack, body, client, logger }) => {
   } catch (error) {
     logger.error("Error declining override:", error);
   }
-});
+}
+slackApp.action('decline_override', handleDeclineOverride);
 
 /* =========================
    /override-list
@@ -797,7 +827,7 @@ slackApp.command(getEnvironmentCommand('override-list'), async ({ command, ack, 
     
     // Build and open the modal
     const overrides = await getAllOverrides();
-    const modalView = buildOverrideListModal(overrides);
+    const modalView = await buildOverrideListModal(overrides);
     await client.views.open({
       trigger_id: command.trigger_id,
       view: modalView
@@ -807,12 +837,71 @@ slackApp.command(getEnvironmentCommand('override-list'), async ({ command, ack, 
   }
 });
 
+/* =========================
+   Action: admin_hub_open_overrides
+   Opens override list from Admin Hub (App Home). Verifies admin channel membership.
+========================= */
+slackApp.action('admin_hub_open_overrides', async ({ ack, body, client, logger }) => {
+  await ack();
+  const triggerId = body?.trigger_id;
+  const userId = body?.user?.id;
+  const adminChannelId = process.env.ADMIN_CHANNEL_ID;
+
+  if (!triggerId) return;
+
+  const noAccessView = {
+    type: 'modal',
+    title: { type: 'plain_text', text: 'Overrides' },
+    close: { type: 'plain_text', text: 'Close' },
+    blocks: [
+      { type: 'section', text: { type: 'mrkdwn', text: ':no_entry: You do not have access to admin tools.' } },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: 'Access is granted by membership in the configured admin channel.' }] }
+    ]
+  };
+
+  try {
+    if (!adminChannelId || !userId) {
+      await client.views.push({ trigger_id: triggerId, view: noAccessView });
+      return;
+    }
+    const result = await isUserInAdminChannel({
+      client,
+      userId,
+      adminChannelId,
+      ttlMs: DEFAULT_TTL_MS,
+      logger
+    });
+    if (!result.isMember) {
+      await client.views.push({ trigger_id: triggerId, view: noAccessView });
+      return;
+    }
+    const overrides = await getAllOverrides();
+    const modalView = await buildOverrideListModal(overrides);
+    await client.views.push({ trigger_id: triggerId, view: modalView });
+  } catch (err) {
+    logger.error('[admin_hub_open_overrides] Error opening override list:', err);
+    try {
+      await client.views.push({
+        trigger_id: triggerId,
+        view: {
+          type: 'modal',
+          title: { type: 'plain_text', text: 'Overrides' },
+          close: { type: 'plain_text', text: 'Close' },
+          blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'Something went wrong. Please try again later.' } }]
+        }
+      });
+    } catch (pushErr) {
+      logger.error('[admin_hub_open_overrides] Failed to push error modal:', pushErr);
+    }
+  }
+});
+
 /**
  * buildOverrideListModal:
  * Lists all overrides in a single modal. Each override can be "removed" (decline).
- * If you want to allow approval from here, you can add an 'Approve' button as well.
+ * Shows sprint name (and date range when available) instead of sprint index.
  */
-function buildOverrideListModal(overrides) {
+async function buildOverrideListModal(overrides) {
   if (!overrides || overrides.length === 0) {
     return {
       type: "modal",
@@ -826,6 +915,18 @@ function buildOverrideListModal(overrides) {
       ]
     };
   }
+  const sprints = await readSprints();
+  const sprintLabel = (sprintIndex) => {
+    const idx = Number(sprintIndex);
+    const sprint = Array.isArray(sprints) ? sprints.find(s => Number(s.sprintIndex) === idx) : null;
+    if (!sprint) return `Sprint ${sprintIndex}`;
+    const name = sprint.sprintName || `Sprint ${idx}`;
+    const start = sprint.startDate || '';
+    const end = sprint.endDate || '';
+    const range = start && end ? `${start} to ${end}` : (start || end || '');
+    return range ? `${name} (${range})` : name;
+  };
+
   const blocks = [
     {
       type: "header",
@@ -833,9 +934,10 @@ function buildOverrideListModal(overrides) {
     },
     { type: "divider" }
   ];
-  
+
   overrides.forEach((o, idx) => {
-    const desc = `*Sprint Index:* ${o.sprintIndex}\n*Role:* ${o.role}\n*Requested By:* <@${o.requestedBy}>\n*Replacement:* <@${o.newSlackId}> (${o.newName || o.newSlackId})\n*Approved:* ${o.approved ? "Yes" : "No"}`;
+    const sprintDisplay = sprintLabel(o.sprintIndex);
+    const desc = `*Sprint:* ${sprintDisplay}\n*Role:* ${o.role}\n*Requested By:* <@${o.requestedBy}>\n*Replacement:* <@${o.newSlackId}> (${o.newName || o.newSlackId})\n*Approved:* ${o.approved ? "Yes" : "No"}`;
     blocks.push({
       type: "section",
       text: { type: "mrkdwn", text: desc },
@@ -849,7 +951,7 @@ function buildOverrideListModal(overrides) {
     });
     blocks.push({ type: "divider" });
   });
-  
+
   return {
     type: "modal",
     callback_id: "admin_override_list_modal",
@@ -880,13 +982,19 @@ slackApp.action('admin_remove_override', async ({ ack, body, client, logger }) =
     // Remove from database or JSON
     if (USE_DATABASE) {
       try {
-        await OverridesRepository.declineOverride(
-          removed.sprintIndex,
-          removed.role,
-          removed.requestedBy,
-          removed.newSlackId,
-          body.user.id
-        );
+        // Delete by id so approved overrides are removed too (declineOverride only removes approved = false)
+        const deleted = removed.id != null
+          ? await OverridesRepository.deleteOverrideById(removed.id, body.user.id)
+          : await OverridesRepository.declineOverride(
+              removed.sprintIndex,
+              removed.role,
+              removed.requestedBy,
+              removed.newSlackId,
+              body.user.id
+            );
+        if (!deleted) {
+          logger.warn('[admin_remove_override] No row deleted for override', { removed: { id: removed.id, sprintIndex: removed.sprintIndex, role: removed.role } });
+        }
         await cache.del('overrides:all');
         await cache.del(`sprintUsers:${removed.sprintIndex}`);
       } catch (error) {
@@ -910,11 +1018,38 @@ slackApp.action('admin_remove_override', async ({ ack, body, client, logger }) =
       text: `The override for *${removed.role}* on sprint index ${removed.sprintIndex} was removed by an admin. You are not on call.`
     });
 
+    // If removed override affected current sprint: sync state, user group, channel topic, refresh App Home
+    try {
+      const currentSprint = await findCurrentSprint();
+      if (currentSprint && Number(removed.sprintIndex) === Number(currentSprint.index)) {
+        const { updated, affectedUserIds } = await applyCurrentSprintRotation();
+        if (updated) {
+          const newRoles = await getSprintUsers(currentSprint.index);
+          const onCallIds = Object.values(newRoles).filter(Boolean);
+          const toRefresh = new Set([
+            ...(affectedUserIds || []),
+            ...onCallIds,
+            body.user?.id
+          ].filter(Boolean));
+          for (const uid of toRefresh) {
+            try {
+              await publishAppHomeForUser(client, uid);
+            } catch (err) {
+              logger.error('[admin_remove_override] Failed to refresh App Home for user:', uid, err);
+            }
+          }
+        }
+      }
+    } catch (syncErr) {
+      logger.error('[admin_remove_override] Sync/refresh after remove failed:', syncErr);
+    }
+
     // Refresh the modal
     const updatedOverrides = await getAllOverrides();
-    const updatedView = buildOverrideListModal(updatedOverrides);
+    const updatedView = await buildOverrideListModal(updatedOverrides);
     await client.views.update({
       view_id: body.view.id,
+      hash: body.view?.hash,
       view: updatedView
     });
   } catch (err) {
@@ -922,4 +1057,4 @@ slackApp.action('admin_remove_override', async ({ ack, body, client, logger }) =
   }
 });
 
-module.exports = {};
+module.exports = { buildOverrideListModal, handleApproveOverride, handleDeclineOverride };

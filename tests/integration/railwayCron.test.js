@@ -1,38 +1,88 @@
+const { describe, it, expect, mock, beforeEach, beforeAll, afterAll } = require('bun:test');
+
 process.env.RAILWAY_CRON_SECRET = 'test-secret';
+
+const getCronTriggerAudit = mock(() => Promise.resolve(null));
+const recordCronTriggerAudit = mock(() => Promise.resolve({}));
+const updateCronTriggerResult = mock(() => Promise.resolve({}));
+const saveSnapshot = mock(() => Promise.resolve({ id: 42 }));
+const computeSnapshotHash = mock(() => 'hash-value');
+const getNotificationAssignments = mock();
+const getLatestSnapshot = mock();
+const diffAssignments = mock();
+const sendChangedNotifications = mock();
+const getWeekendCarryover = mock(() => Promise.resolve(null));
+
+mock.module('../../services/notifications/snapshotService', () => ({
+  getCronTriggerAudit,
+  recordCronTriggerAudit,
+  updateCronTriggerResult,
+  saveSnapshot,
+  computeSnapshotHash,
+  getNotificationAssignments,
+  getLatestSnapshot,
+  diffAssignments,
+  sendChangedNotifications,
+  getWeekendCarryover,
+}));
+
+const notifyUser = mock(() => Promise.resolve());
+mock.module('../../slackNotifier', () => ({
+  notifyUser,
+  notifyAdmins: mock(() => Promise.resolve()),
+  updateOnCallUserGroup: mock(() => Promise.resolve()),
+  updateChannelTopic: mock(() => Promise.resolve()),
+  notifyRotationChanges: mock(() => Promise.resolve()),
+}));
+
+mock.module('../../services/notifications/weekdayPolicy', () => ({
+  shouldDeferNotification: () => false,
+  nextBusinessDay: (d) => d,
+}));
 
 const request = require('supertest');
 const express = require('express');
-const snapshotService = require('../../services/notifications/snapshotService');
-const slackNotifier = require('../../slackNotifier');
-
-jest.mock('../../services/notifications/snapshotService');
-jest.mock('../../slackNotifier');
-
+const http = require('http');
 const railwayCronRouter = require('../../routes/railwayCron');
 
 describe('POST /railway/notify-rotation', () => {
   const app = express();
+  app.use(express.json());
   app.use('/jobs', railwayCronRouter);
+  const server = http.createServer(app);
+  let baseUrl;
+
+  beforeAll((done) => {
+    server.listen(0, () => {
+      const addr = server.address();
+      baseUrl = `http://127.0.0.1:${addr.port}`;
+      done();
+    });
+  });
+
+  afterAll((done) => {
+    server.close(done);
+  });
 
   beforeEach(() => {
-    jest.resetAllMocks();
-    snapshotService.getCronTriggerAudit.mockResolvedValue(null);
-    snapshotService.recordCronTriggerAudit.mockResolvedValue({});
-    snapshotService.updateCronTriggerResult.mockResolvedValue({});
-    snapshotService.saveSnapshot.mockResolvedValue({ id: 42 });
-    snapshotService.computeSnapshotHash.mockReturnValue('hash-value');
+    mock.clearAllMocks();
+    getCronTriggerAudit.mockResolvedValue(null);
+    recordCronTriggerAudit.mockResolvedValue({});
+    updateCronTriggerResult.mockResolvedValue({});
+    saveSnapshot.mockResolvedValue({ id: 42 });
+    computeSnapshotHash.mockReturnValue('hash-value');
   });
 
   it('rejects requests without a valid signature when secret configured', async () => {
-    await request(app).post('/jobs/railway/notify-rotation').expect(401);
+    await request(baseUrl).post('/jobs/railway/notify-rotation').expect(401);
   });
 
   it('skips notification when assignments hash matches latest snapshot', async () => {
-    snapshotService.getNotificationAssignments.mockResolvedValue({
+    getNotificationAssignments.mockResolvedValue({
       account: 'U1',
       producer: 'U2',
     });
-    snapshotService.getLatestSnapshot.mockResolvedValue({
+    getLatestSnapshot.mockResolvedValue({
       hash: 'hash-value',
       disciplineAssignments: {
         account: 'U1',
@@ -40,7 +90,7 @@ describe('POST /railway/notify-rotation', () => {
       },
     });
 
-    const response = await request(app)
+    const response = await request(baseUrl)
       .post('/jobs/railway/notify-rotation')
       .set('X-Railway-Cron-Signature', 'test-secret')
       .send({
@@ -52,30 +102,30 @@ describe('POST /railway/notify-rotation', () => {
     expect(response.body.result).toBe('skipped');
     expect(response.body.notifications_sent).toBe(0);
     expect(response.body.snapshot_id).toBe(42);
-    expect(slackNotifier.notifyUser).not.toHaveBeenCalled();
+    expect(notifyUser).not.toHaveBeenCalled();
   });
 
   it('delivers notifications when assignments change', async () => {
-    snapshotService.getNotificationAssignments.mockResolvedValue({
+    getNotificationAssignments.mockResolvedValue({
       account: 'U1',
       producer: 'U3',
     });
-    snapshotService.getLatestSnapshot.mockResolvedValue({
+    getLatestSnapshot.mockResolvedValue({
       hash: 'different',
       disciplineAssignments: {
         account: 'U1',
         producer: 'U2',
       },
     });
-    snapshotService.diffAssignments.mockReturnValue([
+    diffAssignments.mockReturnValue([
       { role: 'producer', oldUser: 'U2', newUser: 'U3' },
     ]);
-    snapshotService.sendChangedNotifications.mockResolvedValue({
+    sendChangedNotifications.mockResolvedValue({
       sent: 2,
       message: 'notifications sent',
     });
 
-    const response = await request(app)
+    const response = await request(baseUrl)
       .post('/jobs/railway/notify-rotation')
       .set('X-Railway-Cron-Signature', 'test-secret')
       .send({
@@ -87,7 +137,19 @@ describe('POST /railway/notify-rotation', () => {
     expect(response.body.result).toBe('delivered');
     expect(response.body.notifications_sent).toBe(2);
     expect(response.body.snapshot_id).toBe(42);
-    expect(snapshotService.saveSnapshot).toHaveBeenCalled();
+    expect(saveSnapshot).toHaveBeenCalled();
+  });
+
+  it('returns 500 and message when handleRailwayNotification throws', async () => {
+    getNotificationAssignments.mockRejectedValue(new Error('job failed'));
+
+    const response = await request(baseUrl)
+      .post('/jobs/railway/notify-rotation')
+      .set('X-Railway-Cron-Signature', 'test-secret')
+      .send({ trigger_id: 'err-1', scheduled_at: '2025-11-10T16:00:00Z' })
+      .expect(500);
+
+    expect(response.body.status).toBe('error');
+    expect(response.body.message).toBe('job failed');
   });
 });
-

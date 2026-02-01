@@ -12,6 +12,8 @@
 - **In scope**: Slack Home tab UX + modals/CTAs, environment-specific slash commands, triage schedule query, override request + admin management, admin commands/views (including user management), and general “no-crash” handling for Slack payload variants.
 - **Out of scope**: Database connectivity validation and data correctness dependent on DB contents (this UAT validates **behavior + messaging**, even when data is unavailable).
 
+**On-call user group:** Staging uses a separate Slack user group for on-call participants. Set `SLACK_USERGROUP_ID_STAGING` in the staging environment so rotation and on-call updates do not touch the production group. For rotation/on-call tests, this variable must be set. See ENVIRONMENT_COMMANDS.md (On-call user group) for setup.
+
 ---
 
 ## Test Accounts / Roles

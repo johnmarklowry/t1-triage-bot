@@ -43,6 +43,10 @@ const cache = require('./cache/redisClient');
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
+/** Jira form URLs for feedback (App Home feedback section) */
+const BUG_REPORT_URL = 'https://teamone-usa.atlassian.net/jira/software/c/projects/AI/form/105';
+const FEATURE_REQUEST_URL = 'https://teamone-usa.atlassian.net/jira/software/c/projects/AI/form/104';
+
 function createNoopSlackApp() {
   const noop = () => {};
   // Provide the common Bolt registration methods so modules can require() safely in test mode.
@@ -754,17 +758,7 @@ function buildUserUpcomingShiftsBlocks(upcomingShifts, userId) {
  */
 function buildQuickActionsBlock(userId, hasUpcomingShifts, isOnCall, sprintIndex = null) {
   const elements = [];
-  
-  if (isOnCall || hasUpcomingShifts) {
-    elements.push({
-      type: 'button',
-      text: { type: 'plain_text', text: 'Request Coverage' },
-      style: 'primary',
-      action_id: 'request_coverage_from_home',
-      value: JSON.stringify({ userId, sprintIndex })
-    });
-  }
-  
+
   elements.push({
     type: 'button',
     text: { type: 'plain_text', text: 'View My Schedule' },
@@ -964,18 +958,23 @@ async function buildHomeView(current, next, disciplines, userId = null, onCallSt
     quickActionsBlock.elements = quickActionsElements;
   }
 
-  // Ensure Admin CTA is always last in the quick actions lane.
+  // Ensure Admin CTA is always last in the quick actions lane (primary style so admins can easily locate it).
   if (isAdminUser === true) {
     const quickActionsElements = quickActionsBlock.elements || [];
     quickActionsElements.push({
       type: 'button',
       text: { type: 'plain_text', text: 'Admin' },
+      style: 'primary',
       action_id: 'open_admin_hub'
     });
     quickActionsBlock.elements = quickActionsElements;
   }
 
   const blocks = [];
+
+  // Quick actions (at top)
+  blocks.push(quickActionsBlock);
+  blocks.push({ type: 'divider' });
   
   // Hero section: Personal status (show first if user is on call or has next shift)
   if (personalStatusBlocks.length > 0) {
@@ -1001,9 +1000,15 @@ async function buildHomeView(current, next, disciplines, userId = null, onCallSt
     blocks.push(...upcomingShiftsBlocks);
     blocks.push({ type: 'divider' });
   }
-  
-  // Quick actions
-  blocks.push(quickActionsBlock);
+
+  // Feedback section: Bug Report and Feature Request as text links
+  blocks.push({
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: `*Found a bug or want to request a feature?* <${BUG_REPORT_URL}|Report A Bug> · <${FEATURE_REQUEST_URL}|Request A Feature>`
+    }
+  });
 
   // Verify block count doesn't exceed Slack API limit
   if (blocks.length > 50) {

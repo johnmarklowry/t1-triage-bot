@@ -10,6 +10,7 @@ currentState.json
 .env.development
 .env.production
 .env.staging
+.env.e2e
 # Keep env.example as it's a template
 !env.example
 

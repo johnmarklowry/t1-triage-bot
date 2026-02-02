@@ -2,6 +2,31 @@
  * server.js
  ********************************/
 const express = require('express');
+
+/** In development, if the port is in use, try the next port up to basePort + 10. */
+function listenWithPortFallback(app, basePort, onListening) {
+  const isDev = process.env.NODE_ENV === 'development';
+  const maxTries = isDev ? 11 : 1; // dev: try basePort .. basePort+10
+
+  function tryListen(port, tryIndex) {
+    const server = app.listen(port, () => {
+      if (tryIndex > 1) {
+        console.log(`[SERVER] Port ${port - 1} was in use, using port ${port} instead.`);
+      }
+      onListening(port);
+    });
+    server.on('error', (err) => {
+      if (isDev && (err.code === 'EADDRINUSE' || err.code === 'EACCES') && tryIndex < maxTries) {
+        server.close(() => tryListen(port + 1, tryIndex + 1));
+      } else {
+        throw err;
+      }
+    });
+  }
+
+  const port = Number(basePort) || 3000;
+  tryListen(port, 1);
+}
 require('./loadEnv').loadEnv();
 const { scheduleDailyJobs } = require('./triageScheduler');
 const testRoutes = require('./testRoutes');
@@ -148,10 +173,10 @@ async function initializeServer() {
       console.log('[SERVER] Slack app disabled; starting HTTP server for healthchecks/jobs only');
     }
 
-    // Start the combined server on process.env.PORT
+    // Start the combined server on process.env.PORT (in dev, try next port if in use)
     const port = process.env.PORT || 3000;
-    app.listen(port, () => {
-      console.log(`Server is running on port ${port}`);
+    listenWithPortFallback(app, port, (actualPort) => {
+      console.log(`Server is running on port ${actualPort}`);
       scheduleDailyJobs();
     });
     
@@ -171,10 +196,10 @@ async function initializeServer() {
       console.log('[SERVER] Slack app disabled (fallback); starting HTTP server for healthchecks/jobs only');
     }
 
-    // Start server anyway with JSON fallback
+    // Start server anyway with JSON fallback (in dev, try next port if in use)
     const port = process.env.PORT || 3000;
-    app.listen(port, () => {
-      console.log(`Server is running on port ${port} (JSON fallback mode)`);
+    listenWithPortFallback(app, port, (actualPort) => {
+      console.log(`Server is running on port ${actualPort} (JSON fallback mode)`);
       scheduleDailyJobs();
     });
   }

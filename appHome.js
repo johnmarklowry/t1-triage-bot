@@ -1285,6 +1285,9 @@ async function buildUpcomingSprintsModal(options = {}) {
       ? Math.max(1, Number(options.pageSize))
       : DEFAULT_PAGE_SIZE;
 
+    // Ensure persisted sprint index matches date before using it for "Upcoming Sprints"
+    await refreshCurrentState();
+
     // Load data asynchronously
     const currentState = await readCurrentState();
     const allSprints = await readSprints();

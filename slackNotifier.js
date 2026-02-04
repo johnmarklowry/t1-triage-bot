@@ -147,9 +147,10 @@ async function updateOnCallUserGroup(userIdsArray) {
     return;
   }
   try {
+    const usersParam = Array.isArray(userIdsArray) ? userIdsArray.join(',') : '';
     await slackClient.usergroups.users.update({
       usergroup: usergroupId,
-      users: userIdsArray.join(',')
+      users: usersParam
     });
     console.log('[updateOnCallUserGroup] User group updated successfully.');
   } catch (err) {

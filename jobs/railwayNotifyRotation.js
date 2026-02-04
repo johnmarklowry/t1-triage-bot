@@ -12,10 +12,19 @@ const {
   getWeekendCarryover,
 } = require('../services/notifications/snapshotService');
 const { shouldDeferNotification, nextBusinessDay } = require('../services/notifications/weekdayPolicy');
-const { notifyAdmins } = require('../slackNotifier');
+const { notifyAdmins, updateOnCallUserGroup, updateChannelTopic } = require('../slackNotifier');
+const { refreshCurrentState } = require('../dataUtils');
+
+function assignmentsToUserIds(assignments = {}) {
+  const ids = Object.values(assignments).filter(Boolean);
+  return [...new Set(ids)];
+}
 
 async function handleRailwayNotification(payload = {}) {
   const triggerId = payload.trigger_id || crypto.randomUUID();
+
+  // Correct persisted sprint index by date so current_state stays in sync when calendar moves into a new sprint
+  await refreshCurrentState();
 
   const existingAudit = await getCronTriggerAudit(triggerId);
   if (existingAudit && existingAudit.result && existingAudit.result !== 'pending') {
@@ -42,6 +51,11 @@ async function handleRailwayNotification(payload = {}) {
   const latestSnapshot = await getLatestSnapshot();
 
   if (shouldDeferNotification(scheduledTime)) {
+    const userIdsDef = assignmentsToUserIds(assignments);
+    if (userIdsDef.length > 0) {
+      await updateOnCallUserGroup(userIdsDef);
+      await updateChannelTopic(userIdsDef);
+    }
     const snapshot = await saveSnapshot({
       disciplineAssignments: assignments,
       hash,
@@ -64,6 +78,12 @@ async function handleRailwayNotification(payload = {}) {
   }
 
   if (latestSnapshot && latestSnapshot.hash === hash) {
+    // Still sync usergroup and channel topic so they match current rotation (fixes drift)
+    const userIdsSkipped = assignmentsToUserIds(assignments);
+    if (userIdsSkipped.length > 0) {
+      await updateOnCallUserGroup(userIdsSkipped);
+      await updateChannelTopic(userIdsSkipped);
+    }
     const snapshot = await saveSnapshot({
       disciplineAssignments: assignments,
       hash,
@@ -87,6 +107,14 @@ async function handleRailwayNotification(payload = {}) {
     assignments
   );
   const deliveryResult = await sendChangedNotifications(assignments, changes);
+
+  // Sync Slack triage usergroup and channel topic with current rotation
+  const userIds = assignmentsToUserIds(assignments);
+  if (userIds.length > 0) {
+    await updateOnCallUserGroup(userIds);
+    await updateChannelTopic(userIds);
+  }
+
   const snapshot = await saveSnapshot({
     disciplineAssignments: assignments,
     hash,

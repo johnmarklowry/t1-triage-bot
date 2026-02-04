@@ -107,12 +107,11 @@ async function handleRailwayNotification(payload = {}) {
     ? await sendChangedNotifications(assignments, changes)
     : { sent: 0, message: 'No notifications (change was not sprint start)' };
 
-  if (stateWasRefreshed) {
-    const userIds = assignmentsToUserIds(assignments);
-    if (userIds.length > 0) {
-      await updateOnCallUserGroup(userIds);
-      await updateChannelTopic(userIds);
-    }
+  // Update Slack usergroup and channel topic whenever assignments changed (delivered path), so mid-sprint admin changes are reflected
+  const userIds = assignmentsToUserIds(assignments);
+  if (userIds.length > 0) {
+    await updateOnCallUserGroup(userIds);
+    await updateChannelTopic(userIds);
   }
 
   const snapshot = await saveSnapshot({

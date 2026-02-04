@@ -137,7 +137,7 @@ async function initializeServer() {
       const jsonFiles = ['sprints.json', 'disciplines.json', 'currentState.json', 'overrides.json'];
       const hasJsonFiles = jsonFiles.some(file => fs.existsSync(path.join(__dirname, file)));
       if (hasJsonFiles) {
-        const isStaging = process.env.APP_ENV === 'staging' || process.env.ENVIRONMENT === 'staging' || process.env.NODE_ENV === 'staging';
+        const { isStaging } = require('./config');
         const forceSeed = process.env.FORCE_SEED === '1' || process.env.FORCE_SEED === 'true';
         let skipMigration = false;
         if (isStaging && !forceSeed) {

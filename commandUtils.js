@@ -2,6 +2,7 @@
  * commandUtils.js
  * Utility functions for environment-specific slash commands
  */
+const config = require('./config');
 
 /**
  * Get environment-specific command name
@@ -10,13 +11,10 @@
  * @returns {string} - Environment-specific command name
  */
 function getEnvironmentCommand(baseCommand) {
-  const isStaging = process.env.ENVIRONMENT === 'staging' || process.env.APP_ENV === 'staging';
-  
-  if (isStaging) {
+  if (config.isStaging) {
     return `/${baseCommand}-staging`;
-  } else {
-    return `/${baseCommand}`;
   }
+  return `/${baseCommand}`;
 }
 
 /**

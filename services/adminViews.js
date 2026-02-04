@@ -12,6 +12,7 @@ const {
 } = require('../dataUtils');
 
 const { warnIfNonSlackMarkdown } = require('./slackMrkdwn');
+const config = require('../config');
 
 const DISCIPLINE_OPTIONS = [
   { label: 'Account', value: 'account' },
@@ -22,7 +23,7 @@ const DISCIPLINE_OPTIONS = [
 ];
 
 function getDisciplinesSourceFile() {
-  const isStaging = process.env.TRIAGE_ENV === 'staging' || process.env.NODE_ENV === 'staging';
+  const isStaging = config.isStaging;
   const stagingPath = path.join(__dirname, '..', 'disciplines.staging.json');
   if (isStaging && fs.existsSync(stagingPath)) return stagingPath;
   return DISCIPLINES_FILE;

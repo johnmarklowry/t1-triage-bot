@@ -4,12 +4,8 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const config = require('../config');
 const prisma = require('../lib/prisma-client');
-
-function resolveAppEnv() {
-  const env = process.env.APP_ENV || process.env.ENVIRONMENT || (process.env.NODE_ENV === 'production' ? 'production' : 'staging');
-  return env.toLowerCase();
-}
 
 function loadDisciplinesData(appEnv) {
   // Prefer explicit staging file; default to disciplines.json for production if available
@@ -98,11 +94,11 @@ function isForceSeed() {
 }
 
 (async () => {
-  const appEnv = resolveAppEnv();
-  console.log(`[seed] APP_ENV resolved to: ${appEnv}`);
+  const appEnv = config.env;
+  console.log(`[seed] env resolved to: ${appEnv}`);
 
   try {
-    if (appEnv === 'staging' && !isForceSeed()) {
+    if (config.isStaging && !isForceSeed()) {
       try {
         const count = await prisma.discipline.count();
         if (count > 0) {

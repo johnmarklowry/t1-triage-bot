@@ -2,6 +2,7 @@
  * slackNotifier.js
  ********************************/
 const { WebClient } = require('@slack/web-api');
+const config = require('./config');
 const slackClient = new WebClient(process.env.SLACK_BOT_TOKEN);
 
 const STAGING_USERGROUP_HANDLE = 'triage-oncall-staging';
@@ -119,10 +120,10 @@ async function getOrCreateStagingOnCallUserGroupId() {
 
 /**
  * Updates the Slack user group for on-call members.
- * In staging (APP_ENV/ENVIRONMENT=staging), uses SLACK_USERGROUP_ID_STAGING or auto-created/found group; never updates production group.
+ * In staging, uses SLACK_USERGROUP_ID_STAGING or auto-created/found group; never updates production group.
  */
 async function updateOnCallUserGroup(userIdsArray) {
-  const isStaging = process.env.APP_ENV === 'staging' || process.env.ENVIRONMENT === 'staging' || process.env.NODE_ENV === 'staging';
+  const isStaging = config.isStaging;
   let usergroupId = isStaging
     ? process.env.SLACK_USERGROUP_ID_STAGING
     : process.env.SLACK_USERGROUP_ID;

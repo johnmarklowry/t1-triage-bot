@@ -24,7 +24,7 @@ async function handleRailwayNotification(payload = {}) {
   const triggerId = payload.trigger_id || crypto.randomUUID();
 
   // Correct persisted sprint index by date so current_state stays in sync when calendar moves into a new sprint
-  await refreshCurrentState();
+  const stateWasRefreshed = await refreshCurrentState();
 
   const existingAudit = await getCronTriggerAudit(triggerId);
   if (existingAudit && existingAudit.result && existingAudit.result !== 'pending') {
@@ -51,10 +51,12 @@ async function handleRailwayNotification(payload = {}) {
   const latestSnapshot = await getLatestSnapshot();
 
   if (shouldDeferNotification(scheduledTime)) {
-    const userIdsDef = assignmentsToUserIds(assignments);
-    if (userIdsDef.length > 0) {
-      await updateOnCallUserGroup(userIdsDef);
-      await updateChannelTopic(userIdsDef);
+    if (stateWasRefreshed) {
+      const userIdsDef = assignmentsToUserIds(assignments);
+      if (userIdsDef.length > 0) {
+        await updateOnCallUserGroup(userIdsDef);
+        await updateChannelTopic(userIdsDef);
+      }
     }
     const snapshot = await saveSnapshot({
       disciplineAssignments: assignments,
@@ -78,12 +80,6 @@ async function handleRailwayNotification(payload = {}) {
   }
 
   if (latestSnapshot && latestSnapshot.hash === hash) {
-    // Still sync usergroup and channel topic so they match current rotation (fixes drift)
-    const userIdsSkipped = assignmentsToUserIds(assignments);
-    if (userIdsSkipped.length > 0) {
-      await updateOnCallUserGroup(userIdsSkipped);
-      await updateChannelTopic(userIdsSkipped);
-    }
     const snapshot = await saveSnapshot({
       disciplineAssignments: assignments,
       hash,
@@ -106,13 +102,17 @@ async function handleRailwayNotification(payload = {}) {
     latestSnapshot ? latestSnapshot.disciplineAssignments : {},
     assignments
   );
-  const deliveryResult = await sendChangedNotifications(assignments, changes);
+  // Only notify add/remove when sprint start (stateWasRefreshed); avoid re-notifying after an admin update
+  const deliveryResult = stateWasRefreshed
+    ? await sendChangedNotifications(assignments, changes)
+    : { sent: 0, message: 'No notifications (change was not sprint start)' };
 
-  // Sync Slack triage usergroup and channel topic with current rotation
-  const userIds = assignmentsToUserIds(assignments);
-  if (userIds.length > 0) {
-    await updateOnCallUserGroup(userIds);
-    await updateChannelTopic(userIds);
+  if (stateWasRefreshed) {
+    const userIds = assignmentsToUserIds(assignments);
+    if (userIds.length > 0) {
+      await updateOnCallUserGroup(userIds);
+      await updateChannelTopic(userIds);
+    }
   }
 
   const snapshot = await saveSnapshot({

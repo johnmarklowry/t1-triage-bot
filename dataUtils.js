@@ -743,9 +743,10 @@ async function refreshCurrentState() {
     }
 
     const idx = Number(dateBasedSprint.index);
-    const calculatedUsers = await getSprintUsers(idx);
+    const calculatedUsers = await getSprintUsers(idx, { usePersistedForCurrentSprint: false });
     const newState = { sprintIndex: idx, ...calculatedUsers };
     await saveCurrentState(newState);
+    await cache.del(`sprintUsers:${idx}`);
     console.log('[refreshCurrentState] Initialized current state from active sprint:', { sprintIndex: idx });
     return true;
   }
@@ -754,9 +755,10 @@ async function refreshCurrentState() {
   if (dateBasedSprint != null && Number.isFinite(Number(dateBasedSprint.index))) {
     const dateBasedIndex = Number(dateBasedSprint.index);
     if (Number(current.sprintIndex) !== dateBasedIndex) {
-      const calculatedUsers = await getSprintUsers(dateBasedIndex);
+      const calculatedUsers = await getSprintUsers(dateBasedIndex, { usePersistedForCurrentSprint: false });
       const newState = { sprintIndex: dateBasedIndex, ...calculatedUsers };
       await saveCurrentState(newState);
+      await cache.del(`sprintUsers:${dateBasedIndex}`);
       console.log('[refreshCurrentState] Corrected sprint index by date:', { from: current.sprintIndex, to: dateBasedIndex });
       return true;
     }

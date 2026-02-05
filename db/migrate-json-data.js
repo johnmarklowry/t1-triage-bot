@@ -5,9 +5,9 @@
 const fs = require('fs');
 const path = require('path');
 const { UsersRepository, SprintsRepository, CurrentStateRepository, OverridesRepository } = require('./repository');
+const config = require('../config');
 
-// Environment detection for staging
-const IS_STAGING = process.env.TRIAGE_ENV === 'staging' || process.env.NODE_ENV === 'staging';
+const IS_STAGING = config.isStaging;
 
 const SPRINTS_FILE = path.join(__dirname, '..', 'sprints.json');
 // Prefer a staging-specific disciplines file when in staging

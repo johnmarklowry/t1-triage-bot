@@ -137,22 +137,15 @@ async function initializeServer() {
       const jsonFiles = ['sprints.json', 'disciplines.json', 'currentState.json', 'overrides.json'];
       const hasJsonFiles = jsonFiles.some(file => fs.existsSync(path.join(__dirname, file)));
       if (hasJsonFiles) {
-        const { isStaging } = require('./config');
         const forceSeed = process.env.FORCE_SEED === '1' || process.env.FORCE_SEED === 'true';
-        let skipMigration = false;
-        if (isStaging && !forceSeed) {
-          try {
-            const prisma = require('./lib/prisma-client');
-            const count = await prisma.sprint.count();
-            if (count > 0) {
-              skipMigration = true;
-              console.log('[SERVER] Staging DB already has data, skipping JSON migration');
-            }
-          } catch (e) {
-            // DB/Prisma error - proceed with migration
-          }
-        }
-        if (!skipMigration) {
+        const { shouldSkipJsonMigration } = require('./lib/shouldSkipJsonMigration');
+        const skipMigration = await shouldSkipJsonMigration(forceSeed, async () => {
+          const prisma = require('./lib/prisma-client');
+          return prisma.sprint.count();
+        });
+        if (skipMigration) {
+          console.log('[SERVER] DB already has data, skipping JSON migration');
+        } else {
           console.log('[SERVER] Migrating JSON data to database...');
           await migrateJsonData();
         }

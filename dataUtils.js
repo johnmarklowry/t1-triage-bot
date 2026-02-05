@@ -19,9 +19,10 @@ const {
   CurrentStateRepository, 
   OverridesRepository 
 } = require('./db/repository');
+const config = require('./config');
 
-// Environment detection
-const IS_STAGING = process.env.TRIAGE_ENV === 'staging' || process.env.NODE_ENV === 'staging';
+// Environment detection (single source of truth: config.isStaging)
+const IS_STAGING = config.isStaging;
 
 // Define file paths for persisted JSON data (kept for backup/compatibility)
 const CURRENT_STATE_FILE = path.join(__dirname, "currentState.json");

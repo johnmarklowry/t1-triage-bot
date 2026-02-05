@@ -4,6 +4,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const config = require('../config');
 const prisma = require('../lib/prisma-client');
 
 function loadSprintsData() {
@@ -114,21 +115,16 @@ async function upsertSprints(sprints) {
   return { count, errors: errors.length };
 }
 
-function resolveAppEnv() {
-  const env = process.env.APP_ENV || process.env.ENVIRONMENT || (process.env.NODE_ENV === 'production' ? 'production' : 'staging');
-  return env.toLowerCase();
-}
-
 function isForceSeed() {
   return process.env.FORCE_SEED === '1' || process.env.FORCE_SEED === 'true';
 }
 
 (async () => {
-  const appEnv = resolveAppEnv();
+  const appEnv = config.env;
   console.log('[seed-sprints] Starting sprint seeding...');
 
   try {
-    if (appEnv === 'staging' && !isForceSeed()) {
+    if (config.isStaging && !isForceSeed()) {
       try {
         const count = await prisma.sprint.count();
         if (count > 0) {

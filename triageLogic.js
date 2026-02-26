@@ -250,6 +250,9 @@ async function run8amCheck() {
 
       // Update Slack group and topic with deduplicated user list
       const newUserArray = rolesToArray(newRoles);
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/531a11ed-2f40-4efd-8034-868687a93e81',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3d438f'},body:JSON.stringify({sessionId:'3d438f',location:'triageLogic.js:run8amCheck',message:'updating Slack sprint transition',data:{userIdsLength:newUserArray.length,path:'8am_sprint_transition'},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
       await updateOnCallUserGroup(newUserArray);
       await updateChannelTopic(newUserArray);
 
@@ -302,6 +305,9 @@ async function run8amCheck() {
 
         // Update Slack group and topic with deduplicated user list
         const newUserArray = rolesToArray(newRoles);
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/531a11ed-2f40-4efd-8034-868687a93e81',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3d438f'},body:JSON.stringify({sessionId:'3d438f',location:'triageLogic.js:run8amCheck',message:'updating Slack mid-cycle',data:{userIdsLength:newUserArray.length,path:'8am_mid_cycle'},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
         await updateOnCallUserGroup(newUserArray);
         await updateChannelTopic(newUserArray);
 
@@ -342,6 +348,9 @@ async function applyCurrentSprintRotation() {
     console.log("[applyCurrentSprintRotation] Mid-cycle changes detected:", changes);
     await notifyRotationChanges(changes);
     const newUserArray = rolesToArray(newRoles);
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/531a11ed-2f40-4efd-8034-868687a93e81',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3d438f'},body:JSON.stringify({sessionId:'3d438f',location:'triageLogic.js:applyCurrentSprintRotation',message:'updating Slack admin apply',data:{userIdsLength:newUserArray.length,path:'admin_apply_rotation'},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
     await updateOnCallUserGroup(newUserArray);
     await updateChannelTopic(newUserArray);
     currentState = {
@@ -388,6 +397,9 @@ async function setCurrentSprintRolesFromAdmin(newRoles) {
     console.log("[setCurrentSprintRolesFromAdmin] Applying admin changes:", changes);
     await notifyRotationChanges(changes);
     const newUserArray = rolesToArray(roles);
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/531a11ed-2f40-4efd-8034-868687a93e81',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3d438f'},body:JSON.stringify({sessionId:'3d438f',location:'triageLogic.js:setCurrentSprintRolesFromAdmin',message:'updating Slack admin set roles',data:{userIdsLength:newUserArray.length,path:'admin_set_roles'},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
     await updateOnCallUserGroup(newUserArray);
     await updateChannelTopic(newUserArray);
     currentState = {

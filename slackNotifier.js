@@ -123,6 +123,10 @@ async function getOrCreateStagingOnCallUserGroupId() {
  * In staging, uses SLACK_USERGROUP_ID_STAGING or auto-created/found group; never updates production group.
  */
 async function updateOnCallUserGroup(userIdsArray) {
+  // #region agent log
+  const userIdsLength = Array.isArray(userIdsArray) ? userIdsArray.length : 0;
+  fetch('http://127.0.0.1:7244/ingest/531a11ed-2f40-4efd-8034-868687a93e81',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3d438f'},body:JSON.stringify({sessionId:'3d438f',location:'slackNotifier.js:updateOnCallUserGroup',message:'updateOnCallUserGroup entry',data:{userIdsLength},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+  // #endregion
   const isStaging = config.isStaging;
   let usergroupId = isStaging
     ? process.env.SLACK_USERGROUP_ID_STAGING
@@ -137,6 +141,9 @@ async function updateOnCallUserGroup(userIdsArray) {
   }
 
   if (!usergroupId) {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/531a11ed-2f40-4efd-8034-868687a93e81',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3d438f'},body:JSON.stringify({sessionId:'3d438f',location:'slackNotifier.js:updateOnCallUserGroup',message:'updateOnCallUserGroup skipped',data:{reason:'no_usergroup_id'},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
     if (isStaging) {
       console.warn(
         '[updateOnCallUserGroup] Staging: SLACK_USERGROUP_ID_STAGING is not set and auto-create failed (check usergroups:write scope). Skipping user group update. ' +
@@ -153,8 +160,14 @@ async function updateOnCallUserGroup(userIdsArray) {
       usergroup: usergroupId,
       users: usersParam
     });
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/531a11ed-2f40-4efd-8034-868687a93e81',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3d438f'},body:JSON.stringify({sessionId:'3d438f',location:'slackNotifier.js:updateOnCallUserGroup',message:'updateOnCallUserGroup success',data:{userIdsLength},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
     console.log('[updateOnCallUserGroup] User group updated successfully.');
   } catch (err) {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/531a11ed-2f40-4efd-8034-868687a93e81',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3d438f'},body:JSON.stringify({sessionId:'3d438f',location:'slackNotifier.js:updateOnCallUserGroup',message:'updateOnCallUserGroup failed',data:{error:err?.message||String(err)},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
     console.error('Failed to update user group:', err);
     await notifyAdmins(`Error updating Slack user group: ${err.message}`);
   }

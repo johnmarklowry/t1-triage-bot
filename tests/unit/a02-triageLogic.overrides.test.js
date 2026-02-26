@@ -1,4 +1,7 @@
-const { describe, it, expect, mock, beforeEach } = require('bun:test');
+const { describe, it, expect, mock, beforeEach, afterAll } = require('bun:test');
+const path = require('path');
+const { resetModuleCache, restoreAllMocks } = require('../helpers/mockIsolation');
+restoreAllMocks();
 
 const findCurrentSprintMock = mock();
 const readCurrentStateMock = mock();
@@ -30,10 +33,9 @@ mock.module('../../slackNotifier', () => ({
 }));
 
 // Force fresh load so triageLogic uses our mocked dataUtils/slackNotifier (avoids cache from other files)
-if (typeof require.cache !== 'undefined') {
-  delete require.cache[require.resolve('../../triageLogic')];
-}
-const { applyCurrentSprintRotation, setCurrentSprintRolesFromAdmin } = require('../../triageLogic');
+const triageLogicPath = path.resolve(__dirname, '../../triageLogic.js');
+resetModuleCache([triageLogicPath, '../../triageLogic']);
+const { applyCurrentSprintRotation, setCurrentSprintRolesFromAdmin } = require(triageLogicPath);
 
 describe('triageLogic override/rotation', () => {
   beforeEach(() => {
@@ -159,4 +161,8 @@ describe('triageLogic override/rotation', () => {
       expect(readCurrentStateMock).not.toHaveBeenCalled();
     });
   });
+});
+
+afterAll(() => {
+  restoreAllMocks();
 });

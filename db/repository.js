@@ -346,7 +346,7 @@ const SprintsRepository = {
       SELECT sprint_name, start_date, end_date, sprint_index
       FROM sprints
       WHERE start_date <= $1 AND end_date >= $1
-      ORDER BY sprint_index
+      ORDER BY sprint_index DESC
       LIMIT 1
     `, [date]);
     
@@ -516,7 +516,7 @@ const OverridesRepository = {
       FROM overrides
       ORDER BY created_at DESC
     `);
-    
+
     return result.rows.map(row => ({
       id: row.id,
       sprintIndex: row.sprint_index,

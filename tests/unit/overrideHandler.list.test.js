@@ -1,4 +1,4 @@
-const { describe, it, expect, mock } = require('bun:test');
+const { describe, it, expect, mock, afterAll } = require('bun:test');
 
 const readSprintsMock = mock(() =>
   Promise.resolve([
@@ -79,4 +79,8 @@ describe('overrideHandler buildOverrideListModal', () => {
     );
     expect(noOverrides).toBe(true);
   });
+});
+
+afterAll(() => {
+  mock.restore();
 });

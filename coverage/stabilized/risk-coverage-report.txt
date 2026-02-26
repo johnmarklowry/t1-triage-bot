@@ -1,0 +1,20 @@
+
+routes/railwayCron.js
+  lines: 100.00% (33/33) [min 90%]
+  functions: n/a (0/0) [min 90%]
+  branches: n/a (0/0) [min 80%]
+
+jobs/railwayNotifyRotation.js
+  lines: 93.18% (123/132) [min 85%]
+  functions: n/a (0/0) [min 85%]
+  branches: n/a (0/0) [min 70%]
+
+triageLogic.js
+  lines: 44.47% (225/506) [min 44%]
+  functions: n/a (0/0) [min 70%]
+  branches: n/a (0/0) [min 55%]
+
+dataUtils.js
+  lines: 46.81% (316/675) [min 39%]
+  functions: n/a (0/0) [min 60%]
+  branches: n/a (0/0) [min 50%]

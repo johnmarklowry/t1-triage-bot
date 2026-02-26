@@ -21,6 +21,7 @@ function assignmentsToUserIds(assignments = {}) {
 }
 
 async function handleRailwayNotification(payload = {}) {
+  console.log('[RAILWAY] handleRailwayNotification started');
   const triggerId = payload.trigger_id || crypto.randomUUID();
 
   // Correct persisted sprint index by date so current_state stays in sync when calendar moves into a new sprint
@@ -109,6 +110,9 @@ async function handleRailwayNotification(payload = {}) {
 
   // Update Slack usergroup and channel topic whenever assignments changed (delivered path), so mid-sprint admin changes are reflected
   const userIds = assignmentsToUserIds(assignments);
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/531a11ed-2f40-4efd-8034-868687a93e81',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3d438f'},body:JSON.stringify({sessionId:'3d438f',location:'railwayNotifyRotation.js:delivered',message:'delivered path updating Slack',data:{userIdsLength:userIds.length,path:'railway_delivered'},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+  // #endregion
   if (userIds.length > 0) {
     await updateOnCallUserGroup(userIds);
     await updateChannelTopic(userIds);

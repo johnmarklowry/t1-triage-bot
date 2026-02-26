@@ -1,4 +1,4 @@
-const { describe, it, expect, mock } = require('bun:test');
+const { describe, it, expect, mock, afterAll } = require('bun:test');
 
 process.env.USE_DATABASE = 'true';
 process.env.DATABASE_URL = 'postgresql://test';
@@ -103,4 +103,8 @@ describe('dataUtils date helpers', () => {
       expect(result.minute()).toBe(0);
     });
   });
+});
+
+afterAll(() => {
+  mock.restore();
 });

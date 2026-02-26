@@ -1,20 +1,21 @@
-const { describe, it, expect, mock, beforeEach } = require('bun:test');
+const { describe, it, expect, mock, beforeEach, afterAll } = require('bun:test');
+const path = require('path');
+const { resetModuleCache, restoreAllMocks } = require('../helpers/mockIsolation');
+restoreAllMocks();
 
 const queryMock = mock();
 const transactionMock = mock();
 
 // Clear cache so we load real repository with our connection mock (avoids cached repo from other files)
-if (typeof require.cache !== 'undefined') {
-  delete require.cache[require.resolve('../../db/repository')];
-  delete require.cache[require.resolve('../../db/connection')];
-}
+const repositoryPath = path.resolve(__dirname, '../../db/repository.js');
+resetModuleCache([repositoryPath, '../../db/repository', '../../db/connection']);
 
 mock.module('../../db/connection', () => ({
   query: queryMock,
   transaction: transactionMock,
 }));
 
-const { OverridesRepository } = require('../../db/repository');
+const { OverridesRepository, SprintsRepository } = require(repositoryPath);
 
 describe('OverridesRepository (mocked DB)', () => {
   beforeEach(() => {
@@ -146,4 +147,42 @@ describe('OverridesRepository (mocked DB)', () => {
       expect(result).toBe(true);
     });
   });
+});
+
+describe('SprintsRepository overlap selection (mocked DB)', () => {
+  beforeEach(() => {
+    mock.clearAllMocks();
+  });
+
+  it('uses deterministic descending index order for overlap-day current sprint query', async () => {
+    queryMock.mockResolvedValue({
+      rows: [
+        {
+          sprint_name: 'Sprint 11',
+          start_date: '2026-01-14',
+          end_date: '2026-01-28',
+          sprint_index: 11,
+        },
+        {
+          sprint_name: 'Sprint 10',
+          start_date: '2026-01-01',
+          end_date: '2026-01-14',
+          sprint_index: 10,
+        },
+      ],
+    });
+
+    const result = await SprintsRepository.getCurrentSprint(new Date('2026-01-14T12:00:00.000Z'));
+
+    expect(queryMock).toHaveBeenCalledWith(
+      expect.stringContaining('ORDER BY sprint_index DESC'),
+      [expect.any(Date)]
+    );
+    expect(result).not.toBe(null);
+    expect(result.index).toBe(11);
+  });
+});
+
+afterAll(() => {
+  restoreAllMocks();
 });

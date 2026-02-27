@@ -15,20 +15,57 @@ const { shouldDeferNotification, nextBusinessDay } = require('../services/notifi
 const { notifyAdmins, updateOnCallUserGroup, updateChannelTopic } = require('../slackNotifier');
 const { refreshCurrentState } = require('../dataUtils');
 
+function safeJson(value) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return String(value);
+  }
+}
+
+function logRailway(level, message, meta = {}) {
+  const line = {
+    level,
+    message,
+    timestamp: new Date().toISOString(),
+    service: 'railway-notify-job',
+    ...meta,
+  };
+  const output = JSON.stringify(line);
+  if (level === 'error') {
+    console.error(output);
+    return;
+  }
+  if (level === 'warn') {
+    console.warn(output);
+    return;
+  }
+  console.log(output);
+}
+
 function assignmentsToUserIds(assignments = {}) {
   const ids = Object.values(assignments).filter(Boolean);
   return [...new Set(ids)];
 }
 
 async function handleRailwayNotification(payload = {}) {
-  console.log('[RAILWAY] handleRailwayNotification started');
+  const startedAtMs = Date.now();
   const triggerId = payload.trigger_id || crypto.randomUUID();
+  logRailway('info', 'railway notification handler started', {
+    trigger_id: triggerId,
+    payload: safeJson(payload),
+  });
 
   // Correct persisted sprint index by date so current_state stays in sync when calendar moves into a new sprint
   const stateWasRefreshed = await refreshCurrentState();
 
   const existingAudit = await getCronTriggerAudit(triggerId);
   if (existingAudit && existingAudit.result && existingAudit.result !== 'pending') {
+    logRailway('info', 'railway notification idempotent hit', {
+      trigger_id: triggerId,
+      result: existingAudit.result,
+      elapsed_ms: Date.now() - startedAtMs,
+    });
     return {
       result: existingAudit.result,
       notifications_sent: existingAudit.details?.notifications_sent || 0,
@@ -72,6 +109,12 @@ async function handleRailwayNotification(payload = {}) {
       notifications_sent: 0,
       nextDelivery: snapshot.nextDelivery,
     });
+    logRailway('info', 'railway notification deferred', {
+      trigger_id: triggerId,
+      snapshot_id: snapshot.id,
+      next_delivery: snapshot.nextDelivery,
+      elapsed_ms: Date.now() - startedAtMs,
+    });
     return {
       result: 'deferred',
       notifications_sent: 0,
@@ -92,6 +135,12 @@ async function handleRailwayNotification(payload = {}) {
       snapshot_id: snapshot.id,
       notifications_sent: 0,
     });
+    logRailway('info', 'railway notification skipped', {
+      trigger_id: triggerId,
+      snapshot_id: snapshot.id,
+      reason: 'rotation unchanged',
+      elapsed_ms: Date.now() - startedAtMs,
+    });
     return {
       result: 'skipped',
       notifications_sent: 0,
@@ -110,9 +159,6 @@ async function handleRailwayNotification(payload = {}) {
 
   // Update Slack usergroup and channel topic whenever assignments changed (delivered path), so mid-sprint admin changes are reflected
   const userIds = assignmentsToUserIds(assignments);
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/531a11ed-2f40-4efd-8034-868687a93e81',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3d438f'},body:JSON.stringify({sessionId:'3d438f',location:'railwayNotifyRotation.js:delivered',message:'delivered path updating Slack',data:{userIdsLength:userIds.length,path:'railway_delivered'},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
-  // #endregion
   if (userIds.length > 0) {
     await updateOnCallUserGroup(userIds);
     await updateChannelTopic(userIds);
@@ -142,6 +188,14 @@ async function handleRailwayNotification(payload = {}) {
       );
     }
   }
+
+  logRailway('info', 'railway notification delivered', {
+    trigger_id: triggerId,
+    snapshot_id: snapshot.id,
+    notifications_sent: deliveryResult.sent,
+    state_was_refreshed: stateWasRefreshed,
+    elapsed_ms: Date.now() - startedAtMs,
+  });
 
   return {
     result: 'delivered',

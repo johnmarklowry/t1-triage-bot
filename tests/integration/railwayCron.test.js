@@ -83,8 +83,18 @@ describe('POST /railway/notify-rotation', () => {
     refreshCurrentStateMock.mockResolvedValue(false);
   });
 
+  function expectAcceptedContract(response, expectedResult) {
+    expect(response.body).toHaveProperty('status', 'accepted');
+    expect(response.body).toHaveProperty('result', expectedResult);
+    expect(response.body).toHaveProperty('snapshot_id');
+  }
+
   it('rejects requests without a valid signature when secret configured', async () => {
-    await request(baseUrl).post('/jobs/railway/notify-rotation').expect(401);
+    const response = await request(baseUrl).post('/jobs/railway/notify-rotation').expect(401);
+    expect(response.body).toEqual({
+      status: 'unauthorized',
+      message: 'Invalid Railway cron signature',
+    });
   });
 
   it('skips notification when assignments hash matches latest snapshot', async () => {
@@ -109,7 +119,7 @@ describe('POST /railway/notify-rotation', () => {
       })
       .expect(202);
 
-    expect(response.body.result).toBe('skipped');
+    expectAcceptedContract(response, 'skipped');
     expect(response.body.notifications_sent).toBe(0);
     expect(response.body.snapshot_id).toBe(42);
     expect(notifyUser).not.toHaveBeenCalled();
@@ -146,12 +156,12 @@ describe('POST /railway/notify-rotation', () => {
       })
       .expect(202);
 
-    expect(response.body.result).toBe('delivered');
+    expectAcceptedContract(response, 'delivered');
     expect(response.body.notifications_sent).toBe(0);
     expect(response.body.snapshot_id).toBe(42);
     expect(saveSnapshot).toHaveBeenCalled();
-    expect(updateOnCallUserGroupMock).not.toHaveBeenCalled();
-    expect(updateChannelTopicMock).not.toHaveBeenCalled();
+    expect(updateOnCallUserGroupMock).toHaveBeenCalled();
+    expect(updateChannelTopicMock).toHaveBeenCalled();
   });
 
   it('delivered: updates usergroup/topic and notifies when state was refreshed (sprint start)', async () => {
@@ -184,7 +194,43 @@ describe('POST /railway/notify-rotation', () => {
       })
       .expect(202);
 
-    expect(response.body.result).toBe('delivered');
+    expectAcceptedContract(response, 'delivered');
+    expect(updateOnCallUserGroupMock).toHaveBeenCalled();
+    expect(updateChannelTopicMock).toHaveBeenCalled();
+  });
+
+  it('overlap cutover: refreshed state on 8AM PT boundary triggers delivered synchronization', async () => {
+    refreshCurrentStateMock.mockResolvedValue(true);
+    getNotificationAssignments.mockResolvedValue({
+      account: 'U_OLD',
+      producer: 'U_NEW',
+    });
+    getLatestSnapshot.mockResolvedValue({
+      hash: 'different',
+      disciplineAssignments: {
+        account: 'U_OLD',
+        producer: 'U_OLD_PRODUCER',
+      },
+    });
+    diffAssignments.mockReturnValue([
+      { role: 'producer', oldUser: 'U_OLD_PRODUCER', newUser: 'U_NEW' },
+    ]);
+    sendChangedNotifications.mockResolvedValue({
+      sent: 1,
+      message: 'notifications sent',
+    });
+
+    const response = await request(baseUrl)
+      .post('/jobs/railway/notify-rotation')
+      .set('X-Railway-Cron-Signature', 'test-secret')
+      .send({
+        trigger_id: 'overlap-cutover-8am',
+        scheduled_at: '2026-01-14T16:00:00Z',
+      })
+      .expect(202);
+
+    expectAcceptedContract(response, 'delivered');
+    expect(refreshCurrentStateMock).toHaveBeenCalledTimes(1);
     expect(updateOnCallUserGroupMock).toHaveBeenCalled();
     expect(updateChannelTopicMock).toHaveBeenCalled();
   });
@@ -196,6 +242,10 @@ describe('POST /railway/notify-rotation', () => {
       producer: 'U2',
     });
     refreshCurrentStateMock.mockResolvedValue(false);
+    saveSnapshot.mockResolvedValue({
+      id: 42,
+      nextDelivery: '2025-11-11T16:00:00.000Z',
+    });
 
     const response = await request(baseUrl)
       .post('/jobs/railway/notify-rotation')
@@ -206,7 +256,8 @@ describe('POST /railway/notify-rotation', () => {
       })
       .expect(202);
 
-    expect(response.body.result).toBe('deferred');
+    expectAcceptedContract(response, 'deferred');
+    expect(response.body).toHaveProperty('nextDelivery');
     expect(updateOnCallUserGroupMock).not.toHaveBeenCalled();
     expect(updateChannelTopicMock).not.toHaveBeenCalled();
   });
@@ -218,6 +269,10 @@ describe('POST /railway/notify-rotation', () => {
       producer: 'U2',
     });
     refreshCurrentStateMock.mockResolvedValue(true);
+    saveSnapshot.mockResolvedValue({
+      id: 42,
+      nextDelivery: '2025-11-11T16:00:00.000Z',
+    });
 
     const response = await request(baseUrl)
       .post('/jobs/railway/notify-rotation')
@@ -228,9 +283,28 @@ describe('POST /railway/notify-rotation', () => {
       })
       .expect(202);
 
-    expect(response.body.result).toBe('deferred');
+    expectAcceptedContract(response, 'deferred');
+    expect(response.body).toHaveProperty('nextDelivery');
     expect(updateOnCallUserGroupMock).toHaveBeenCalled();
     expect(updateChannelTopicMock).toHaveBeenCalled();
+  });
+
+  it('returns 400 for primitive JSON payload (strict parser validation)', async () => {
+    await request(baseUrl)
+      .post('/jobs/railway/notify-rotation')
+      .set('X-Railway-Cron-Signature', 'test-secret')
+      .set('Content-Type', 'application/json')
+      .send('"just-a-string-payload"')
+      .expect(400);
+  });
+
+  it('returns 400 for malformed JSON payload (parser-level validation)', async () => {
+    await request(baseUrl)
+      .post('/jobs/railway/notify-rotation')
+      .set('X-Railway-Cron-Signature', 'test-secret')
+      .set('Content-Type', 'application/json')
+      .send('{bad-json')
+      .expect(400);
   });
 
   it('returns 500 and message when handleRailwayNotification throws', async () => {
@@ -244,5 +318,32 @@ describe('POST /railway/notify-rotation', () => {
 
     expect(response.body.status).toBe('error');
     expect(response.body.message).toBe('job failed');
+  });
+
+  it('replays idempotent result when trigger audit already completed', async () => {
+    getCronTriggerAudit.mockResolvedValue({
+      id: 'trigger-replay-1',
+      result: 'delivered',
+      details: {
+        notifications_sent: 3,
+        snapshot_id: 999,
+      },
+    });
+
+    const response = await request(baseUrl)
+      .post('/jobs/railway/notify-rotation')
+      .set('X-Railway-Cron-Signature', 'test-secret')
+      .send({ trigger_id: 'trigger-replay-1', scheduled_at: '2025-11-10T16:00:00Z' })
+      .expect(202);
+
+    expectAcceptedContract(response, 'delivered');
+    expect(response.body.notifications_sent).toBe(3);
+    expect(response.body.snapshot_id).toBe(999);
+    expect(getNotificationAssignments).not.toHaveBeenCalled();
+    expect(saveSnapshot).not.toHaveBeenCalled();
+    expect(updateOnCallUserGroupMock).not.toHaveBeenCalled();
+    expect(updateChannelTopicMock).not.toHaveBeenCalled();
+    expect(recordCronTriggerAudit).not.toHaveBeenCalled();
+    expect(updateCronTriggerResult).not.toHaveBeenCalled();
   });
 });

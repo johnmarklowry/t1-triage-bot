@@ -135,6 +135,70 @@ function getTodayPT() {
 }
 
 /**
+ * Get the current Pacific Time timestamp.
+ */
+function getNowPT() {
+  return dayjs().tz("America/Los_Angeles");
+}
+
+function normalizeDateOnly(value) {
+  if (value instanceof Date) {
+    return dayjs(value).tz("America/Los_Angeles").format('YYYY-MM-DD');
+  }
+  if (typeof value === 'string') {
+    return value.split('T')[0];
+  }
+  return String(value || '').trim();
+}
+
+function isAtOrAfterCutover(nowPT, cutoverHour = 8) {
+  const h = nowPT.hour();
+  const m = nowPT.minute();
+  if (h > cutoverHour) return true;
+  if (h < cutoverHour) return false;
+  return m >= 0;
+}
+
+/**
+ * Resolve current sprint from a list for a specific PT timestamp.
+ * Inclusive date windows are preserved; overlap ties are deterministic:
+ * before 8AM PT -> lower sprint index, at/after 8AM PT -> higher sprint index.
+ */
+function resolveCurrentSprintForNow(sprints, nowPT = getNowPT()) {
+  if (!Array.isArray(sprints) || sprints.length === 0) return null;
+  const todayPT = nowPT.startOf('day');
+
+  const candidates = [];
+  for (let i = 0; i < sprints.length; i++) {
+    const s = sprints[i];
+    const sprintName = s?.sprintName ?? null;
+    const startDate = normalizeDateOnly(s?.startDate);
+    const endDate = normalizeDateOnly(s?.endDate);
+    const sprintStart = parsePTDate(startDate);
+    const sprintEnd = parsePTDate(endDate);
+    if (!sprintStart || !sprintEnd) continue;
+
+    if (
+      (todayPT.isAfter(sprintStart) || todayPT.isSame(sprintStart, 'day')) &&
+      (todayPT.isBefore(sprintEnd) || todayPT.isSame(sprintEnd, 'day'))
+    ) {
+      const idx = Number.isFinite(Number(s?.sprintIndex))
+        ? Number(s.sprintIndex)
+        : Number.isFinite(Number(s?.index))
+          ? Number(s.index)
+          : i;
+      candidates.push({ index: idx, sprintName, startDate, endDate });
+    }
+  }
+
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+
+  const sorted = candidates.slice().sort((a, b) => Number(a.index) - Number(b.index));
+  return isAtOrAfterCutover(nowPT, 8) ? sorted[sorted.length - 1] : sorted[0];
+}
+
+/**
  * Generic function to load JSON from a file (legacy support)
  */
 function loadJSON(filePath) {
@@ -455,7 +519,8 @@ async function saveCurrentState(state) {
  */
 async function readOverrides() {
   if (OVERRIDES_SOURCE === 'json' || !HAS_DATABASE_URL) {
-    return loadJSON(OVERRIDES_FILE) || [];
+    const jsonOverrides = loadJSON(OVERRIDES_FILE) || [];
+    return jsonOverrides;
   }
 
   try {
@@ -516,52 +581,15 @@ async function saveOverrides(overrides) {
  * Find the current sprint based on today's date (in Pacific Time)
  */
 async function findCurrentSprint() {
-  if (!USE_DATABASE) {
-    const sprints = await readSprints();
-    const todayPT = getTodayPT();
-
-    for (let i = 0; i < sprints.length; i++) {
-      const s = sprints[i];
-      const { sprintName, startDate, endDate, sprintIndex } = s;
-      const sprintStart = parsePTDate(startDate);
-      const sprintEnd = parsePTDate(endDate);
-      if (!sprintStart || !sprintEnd) continue;
-      if (
-        (todayPT.isAfter(sprintStart) || todayPT.isSame(sprintStart, 'day')) &&
-        (todayPT.isBefore(sprintEnd) || todayPT.isSame(sprintEnd, 'day'))
-      ) {
-        const idx = Number.isFinite(sprintIndex) ? Number(sprintIndex) : i;
-        return { index: idx, sprintName, startDate, endDate };
-      }
-    }
-    return null;
-  }
-
   try {
-    const todayPT = getTodayPT();
-    const todayDate = todayPT.toDate();
-    const currentSprint = await SprintsRepository.getCurrentSprint(todayDate);
-    return currentSprint;
+    const sprints = await readSprints();
+    const nowPT = getNowPT();
+    return resolveCurrentSprintForNow(sprints, nowPT);
   } catch (error) {
     console.error('[findCurrentSprint] Database error:', error);
-    // Fallback to JSON logic
+    // Fallback to local JSON logic
     const sprints = await readSprints();
-    const today = getTodayPT();
-    for (let i = 0; i < sprints.length; i++) {
-      const s = sprints[i];
-      const { sprintName, startDate, endDate, sprintIndex } = s;
-      const sprintStart = parsePTDate(startDate);
-      const sprintEnd = parsePTDate(endDate);
-      if (!sprintStart || !sprintEnd) continue;
-      if (
-        (today.isAfter(sprintStart) || today.isSame(sprintStart, 'day')) &&
-        (today.isBefore(sprintEnd) || today.isSame(sprintEnd, 'day'))
-      ) {
-        const idx = Number.isFinite(sprintIndex) ? Number(sprintIndex) : i;
-        return { index: idx, sprintName, startDate, endDate };
-      }
-    }
-    return null;
+    return resolveCurrentSprintForNow(sprints, getNowPT());
   }
 }
 
@@ -635,7 +663,13 @@ async function getSprintUsers(sprintIndex, options = {}) {
 
   if (cacheKey && usePersistedForCurrentSprint) {
     const cached = await cache.getJson(cacheKey);
-    if (cached) return cached;
+    if (cached) {
+      // #region agent log
+      const count = Object.values(cached).filter(Boolean).length;
+      fetch('http://127.0.0.1:7244/ingest/531a11ed-2f40-4efd-8034-868687a93e81',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3d438f'},body:JSON.stringify({sessionId:'3d438f',location:'dataUtils.js:getSprintUsers',message:'getSprintUsers return',data:{sprintIndex:idx,source:'cache',userCount:count},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      return cached;
+    }
   }
 
   const dateBasedSprint = await findCurrentSprint();
@@ -653,6 +687,10 @@ async function getSprintUsers(sprintIndex, options = {}) {
       const hasAny = [fromPersisted.account, fromPersisted.producer, fromPersisted.po, fromPersisted.uiEng, fromPersisted.beEng].some(Boolean);
       if (hasAny) {
         if (cacheKey) await cache.setJson(cacheKey, fromPersisted, CACHE_TTLS.sprintUsers);
+        // #region agent log
+        const count = Object.values(fromPersisted).filter(Boolean).length;
+        fetch('http://127.0.0.1:7244/ingest/531a11ed-2f40-4efd-8034-868687a93e81',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3d438f'},body:JSON.stringify({sessionId:'3d438f',location:'dataUtils.js:getSprintUsers',message:'getSprintUsers return',data:{sprintIndex:idx,source:'persisted',userCount:count},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
         return fromPersisted;
       }
     }
@@ -690,6 +728,10 @@ async function getSprintUsers(sprintIndex, options = {}) {
     await cache.setJson(cacheKey, users, CACHE_TTLS.sprintUsers);
   }
 
+  // #region agent log
+  const userCount = Object.values(users).filter(Boolean).length;
+  fetch('http://127.0.0.1:7244/ingest/531a11ed-2f40-4efd-8034-868687a93e81',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'3d438f'},body:JSON.stringify({sessionId:'3d438f',location:'dataUtils.js:getSprintUsers',message:'getSprintUsers return',data:{sprintIndex:idx,source:'computed',userCount},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+  // #endregion
   return users;
 }
 
@@ -792,6 +834,8 @@ module.exports = {
   formatSprintLabelPT,
   parsePTDate,
   getTodayPT,
+  getNowPT,
+  resolveCurrentSprintForNow,
   
   // Sprint-related functions
   findCurrentSprint,

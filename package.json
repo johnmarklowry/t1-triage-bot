@@ -6,7 +6,12 @@
   "scripts": {
     "start": "node server.js",
     "dev": "bun --watch --inspect server.js",
-    "test": "bun test --serial",
+    "test": "node scripts/test-stabilized.js",
+    "test:stabilized": "node scripts/test-stabilized.js",
+    "test:coverage:stabilized": "node scripts/test-stabilized-coverage.js",
+    "coverage:check:risk": "node scripts/check-risk-coverage.js",
+    "test:coverage": "bun run test:coverage:stabilized && bun run coverage:check:risk",
+    "test:determinism": "node scripts/check-determinism.js",
     "migrate": "node -e \"require('./db/migrate').runMigrations().then(() => process.exit(0))\"",
     "migrate-data": "node db/migrate-json-data.js",
     "db-status": "node -e \"require('./db/migrate').getMigrationStatus().then(status => { console.log(JSON.stringify(status, null, 2)); process.exit(0); })\"",

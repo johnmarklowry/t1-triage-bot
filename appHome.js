@@ -2514,6 +2514,15 @@ slackApp.event('app_home_opened', async ({ event, client, logger }) => {
     logger?.warn?.('[app_home_opened] Cache invalidation failed (continuing with load)', { error: cacheErr?.message });
   }
 
+  // If sprint index was corrected by date (e.g. calendar moved to new sprint), sync Slack user group and channel topic
+  // so they match what we're about to show; otherwise the home tab can show new rotation while Slack still has old list.
+  let stateWasRefreshed = false;
+  try {
+    stateWasRefreshed = await refreshCurrentState();
+  } catch (refreshErr) {
+    logger?.warn?.('[app_home_opened] refreshCurrentState failed (continuing)', { error: refreshErr?.message });
+  }
+
   try {
     // Try to load all data in parallel for better performance
     // Each load is wrapped in try-catch to handle partial failures
@@ -2548,7 +2557,22 @@ slackApp.event('app_home_opened', async ({ event, client, logger }) => {
     ];
     
     await Promise.all(loadPromises);
-    
+
+    // When we just corrected sprint state by date, push the same rotation to Slack so user group and topic stay in sync
+    if (stateWasRefreshed && current && Array.isArray(current.users) && current.users.length > 0) {
+      try {
+        const { updateOnCallUserGroup, updateChannelTopic } = require('./slackNotifier');
+        const userIds = current.users.map(u => u.slackId).filter(Boolean);
+        if (userIds.length > 0) {
+          await updateOnCallUserGroup(userIds);
+          await updateChannelTopic(userIds);
+          logger?.info?.('[app_home_opened] Synced Slack user group and channel topic after sprint state refresh');
+        }
+      } catch (syncErr) {
+        logger?.warn?.('[app_home_opened] Failed to sync Slack after state refresh', { error: syncErr?.message });
+      }
+    }
+
     // If all data loading failed, show fallback view
     if (current === null && next === null && disciplines === null) {
       logger.warn('[app_home_opened] All data sources failed, showing fallback view', {

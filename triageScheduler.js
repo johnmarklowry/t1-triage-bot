@@ -27,6 +27,9 @@ function scheduleDailyJobs() {
   });
 
   console.log('[CRON] Scheduled daily cron jobs at 5PM & 8AM PT.');
+  console.warn(
+    '[CRON] ENABLE_IN_APP_CRON=true runs 5PM/8AM jobs in this process. If Railway cron also calls rotation/notification endpoints, you may get duplicate side effects—prefer one scheduler in production. See ENVIRONMENT_COMMANDS.md.'
+  );
 }
 
 module.exports = { scheduleDailyJobs };

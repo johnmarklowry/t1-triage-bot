@@ -71,3 +71,8 @@
 - Successful deliveries create a `notification_snapshots` row linked via `railway_trigger_id`.
 - Deferred runs store `next_delivery` suggestion for operations monitoring.
 
+## Admin pre-alignment (in-app)
+When an admin applies rotation changes for the current sprint (`applyCurrentSprintRotation` or `setCurrentSprintRolesFromAdmin`), the server inserts a `notification_snapshots` row with `delivery_status: skipped` and `delivery_reason: admin pre-aligned`, using the same assignment hash as the Railway job. The next Railway cron invocation then typically hits the **skipped** branch (rotation unchanged relative to the latest snapshot), avoiding redundant Slack user-group/topic updates for a roster the admin already synchronized.
+
+Do not run the in-app 8AM/5PM scheduler (`ENABLE_IN_APP_CRON=true`) alongside Railway cron in production unless you understand duplicate side effects; see `ENVIRONMENT_COMMANDS.md`.
+

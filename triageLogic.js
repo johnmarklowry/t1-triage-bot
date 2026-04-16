@@ -26,6 +26,8 @@ const {
 } = require("./dataUtils");
 
 const { notifyUser, notifyAdmins, updateOnCallUserGroup, updateChannelTopic, notifyRotationChanges } = require("./slackNotifier");
+const { recordAdminPreAlignedSnapshot } = require("./services/notifications/snapshotService");
+const cache = require("./cache/redisClient");
 
 // Define discipline-specific fallback IDs (if a discipline list is empty)
 const FALLBACK_USERS = {
@@ -358,6 +360,7 @@ async function applyCurrentSprintRotation() {
       ...newRoles
     };
     await saveCurrentState(currentState);
+    await recordAdminPreAlignedSnapshot(newRoles);
     const affectedUserIds = [...new Set(changes.flatMap(c => [c.oldUser, c.newUser].filter(Boolean)))];
     return { updated: true, affectedUserIds };
   } catch (err) {
@@ -407,6 +410,7 @@ async function setCurrentSprintRolesFromAdmin(newRoles) {
       ...roles
     };
     await saveCurrentState(currentState);
+    await recordAdminPreAlignedSnapshot(roles);
     const affectedUserIds = [...new Set(changes.flatMap(c => [c.oldUser, c.newUser].filter(Boolean)))];
     return { updated: true, affectedUserIds };
   } catch (err) {
@@ -619,6 +623,42 @@ function getCurrentState() {
   return currentState;
 }
 
+/**
+ * After global deactivate, recompute persisted on-call if the user still appeared in current_state.
+ * Uses rotation math without trusting stale persisted rows (auto-next).
+ * @param {string} slackId
+ * @returns {Promise<{ reconciled: boolean }>}
+ */
+async function reconcileCurrentStateAfterUserDeactivated(slackId) {
+  try {
+    const currentSprint = await dataUtilsFindCurrentSprint();
+    if (!currentSprint || !Number.isFinite(Number(currentSprint.index))) {
+      return { reconciled: false };
+    }
+    const state = await readCurrentState();
+    if (state.sprintIndex == null || Number(state.sprintIndex) !== Number(currentSprint.index)) {
+      return { reconciled: false };
+    }
+    const roleKeys = ['account', 'producer', 'po', 'uiEng', 'beEng'];
+    const inState = roleKeys.some((r) => state[r] === slackId);
+    if (!inState) {
+      return { reconciled: false };
+    }
+    const newRoles = await dataUtilsGetSprintUsers(currentSprint.index, { usePersistedForCurrentSprint: false });
+    currentState = {
+      sprintIndex: currentSprint.index,
+      ...newRoles,
+    };
+    await saveCurrentState(currentState);
+    await cache.del(`sprintUsers:${currentSprint.index}`);
+    await recordAdminPreAlignedSnapshot(newRoles);
+    return { reconciled: true };
+  } catch (err) {
+    console.error('[reconcileCurrentStateAfterUserDeactivated]', err);
+    return { reconciled: false };
+  }
+}
+
 /* =========================
    Exported Functions
    ========================= */
@@ -630,5 +670,6 @@ module.exports = {
   getCurrentState,
   forceSprintTransition,
   applyCurrentSprintRotation,
-  setCurrentSprintRolesFromAdmin
+  setCurrentSprintRolesFromAdmin,
+  reconcileCurrentStateAfterUserDeactivated
 };

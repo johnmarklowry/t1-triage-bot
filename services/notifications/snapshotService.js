@@ -84,6 +84,30 @@ function computeSnapshotHash(assignments = {}) {
   return crypto.createHash('sha256').update(serialized).digest('hex');
 }
 
+/**
+ * Record a notification snapshot so the next Railway cron run matches hash and skips redundant Slack updates.
+ * Safe to call when DATABASE_URL / notification_snapshots is unavailable (logs and returns null).
+ * @param {Record<string, string|null|undefined>} assignments - discipline -> Slack user id map (same shape as getSprintUsers)
+ */
+async function recordAdminPreAlignedSnapshot(assignments) {
+  if (!assignments || typeof assignments !== 'object') {
+    return null;
+  }
+  try {
+    const hash = computeSnapshotHash(assignments);
+    return await saveSnapshot({
+      disciplineAssignments: assignments,
+      hash,
+      deliveryStatus: 'skipped',
+      deliveryReason: 'admin pre-aligned',
+      railwayTriggerId: null,
+    });
+  } catch (err) {
+    console.warn('[snapshotService] recordAdminPreAlignedSnapshot failed:', err?.message || err);
+    return null;
+  }
+}
+
 module.exports = {
   getLatestSnapshot,
   saveSnapshot,
@@ -95,5 +119,6 @@ module.exports = {
   sendChangedNotifications,
   computeSnapshotHash,
   getWeekendCarryover,
+  recordAdminPreAlignedSnapshot,
 };
 

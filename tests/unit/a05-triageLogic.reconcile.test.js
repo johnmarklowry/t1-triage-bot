@@ -8,6 +8,8 @@ const getSprintUsersMock = mock();
 const saveCurrentStateMock = mock(() => Promise.resolve());
 const recordAlignMock = mock(() => Promise.resolve({ id: 1 }));
 const cacheDelMock = mock(() => Promise.resolve());
+const updateOnCallUserGroupMock = mock(() => Promise.resolve());
+const updateChannelTopicMock = mock(() => Promise.resolve());
 
 mock.module('../../dataUtils', () => ({
   readCurrentState: readCurrentStateMock,
@@ -20,8 +22,8 @@ mock.module('../../dataUtils', () => ({
 mock.module('../../slackNotifier', () => ({
   notifyUser: mock(() => Promise.resolve()),
   notifyAdmins: mock(() => Promise.resolve()),
-  updateOnCallUserGroup: mock(() => Promise.resolve()),
-  updateChannelTopic: mock(() => Promise.resolve()),
+  updateOnCallUserGroup: updateOnCallUserGroupMock,
+  updateChannelTopic: updateChannelTopicMock,
   notifyRotationChanges: mock(() => Promise.resolve()),
 }));
 
@@ -82,6 +84,8 @@ describe('reconcileCurrentStateAfterUserDeactivated', () => {
     expect(getSprintUsersMock).toHaveBeenCalledWith(2, { usePersistedForCurrentSprint: false });
     expect(saveCurrentStateMock).toHaveBeenCalled();
     expect(cacheDelMock).toHaveBeenCalledWith('sprintUsers:2');
+    expect(updateOnCallUserGroupMock).toHaveBeenCalledWith(['UNEW']);
+    expect(updateChannelTopicMock).toHaveBeenCalledWith(['UNEW']);
     expect(recordAlignMock).toHaveBeenCalledWith(newRoles);
   });
 });

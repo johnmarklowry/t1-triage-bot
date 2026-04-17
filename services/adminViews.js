@@ -22,6 +22,9 @@ const DISCIPLINE_OPTIONS = [
   { label: 'BE Engineer', value: 'beEng' },
 ];
 
+const SLACK_MODAL_BLOCK_LIMIT = 100;
+const BLOCKS_PER_MEMBER = 2; // section block + actions block per member row
+
 function getDisciplinesSourceFile() {
   const isStaging = config.isStaging;
   const stagingPath = path.join(__dirname, '..', 'disciplines.staging.json');
@@ -123,7 +126,7 @@ async function buildAdminDisciplinesModalView({ discipline, showInactive }) {
   // Reserve 3 blocks for: divider + inactive-header section + footer context note.
   let activeShown = 0;
   for (const u of active) {
-    if (blocks.length + 2 > 100 - 3) break;
+    if (blocks.length + BLOCKS_PER_MEMBER > SLACK_MODAL_BLOCK_LIMIT - 3) break;
     blocks.push({
       type: 'section',
       text: { type: 'mrkdwn', text: `*${u.name}* (<@${u.slackId}>)\nRelease team: *${u.onReleaseTeam ? 'Yes' : 'No'}*` }
@@ -176,7 +179,7 @@ async function buildAdminDisciplinesModalView({ discipline, showInactive }) {
     // Reserve 1 block for a potential truncation context note at the end.
     let inactiveShown = 0;
     for (const u of inactive) {
-      if (blocks.length + 2 > 100 - 1) break;
+      if (blocks.length + BLOCKS_PER_MEMBER > SLACK_MODAL_BLOCK_LIMIT - 1) break;
       blocks.push({
         type: 'section',
         text: { type: 'mrkdwn', text: `*${u.name}* (<@${u.slackId}>)\nRelease team: *${u.onReleaseTeam ? 'Yes' : 'No'}*` }
@@ -214,7 +217,7 @@ async function buildAdminDisciplinesModalView({ discipline, showInactive }) {
   }
 
   // Slack modal limit: 100 blocks
-  if (blocks.length > 100) blocks.splice(100);
+  if (blocks.length > SLACK_MODAL_BLOCK_LIMIT) blocks.splice(SLACK_MODAL_BLOCK_LIMIT);
 
   return {
     type: 'modal',
@@ -341,7 +344,7 @@ async function buildAdminSprintsModalView({ page = 0, pageSize = 12 } = {}) {
   }
 
   // Slack modal limit: 100 blocks
-  if (blocks.length > 100) blocks.splice(100);
+  if (blocks.length > SLACK_MODAL_BLOCK_LIMIT) blocks.splice(SLACK_MODAL_BLOCK_LIMIT);
 
   return {
     type: 'modal',
@@ -446,7 +449,7 @@ async function buildAdminUsersModalView() {
   blocks.push({ type: "section", text: { type: "mrkdwn", text: `*Inactive* (${inactiveUsers.length})` } });
   inactiveUsers.slice(0, 35).forEach(u => blocks.push(renderUserRow(u)));
 
-  if (blocks.length > 100) blocks.splice(100);
+  if (blocks.length > SLACK_MODAL_BLOCK_LIMIT) blocks.splice(SLACK_MODAL_BLOCK_LIMIT);
 
   return {
     type: "modal",

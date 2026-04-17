@@ -97,12 +97,13 @@ async function handleRailwayReleaseTeamUpdate(payload = {}) {
     });
     return result;
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
     logRelease('error', 'release-team handler failed', {
       trigger_id: triggerId,
       elapsed_ms: Date.now() - startedAtMs,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage,
     });
-    await notifyAdmins(`Release team update failed: ${error.message}`);
+    await notifyAdmins(`Release team update failed: ${errorMessage}`);
     throw error;
   }
 }

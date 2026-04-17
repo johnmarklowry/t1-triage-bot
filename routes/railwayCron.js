@@ -82,14 +82,15 @@ router.post('/railway/notify-rotation', async (req, res) => {
       ...result,
     });
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
     logRailway('error', 'railway cron handler failed', {
       trigger_id: triggerId,
       elapsed_ms: Date.now() - startedAtMs,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage,
     });
     res.status(500).json({
       status: 'error',
-      message: error.message,
+      message: errorMessage,
     });
   }
 });

@@ -120,7 +120,10 @@ async function buildAdminDisciplinesModalView({ discipline, showInactive }) {
     confirmText: 'Remove'
   });
 
-  active.slice(0, 40).forEach(u => {
+  // Reserve 3 blocks for: divider + inactive-header section + footer context note.
+  let activeShown = 0;
+  for (const u of active) {
+    if (blocks.length + 2 > 100 - 3) break;
     blocks.push({
       type: 'section',
       text: { type: 'mrkdwn', text: `*${u.name}* (<@${u.slackId}>)\nRelease team: *${u.onReleaseTeam ? 'Yes' : 'No'}*` }
@@ -144,10 +147,11 @@ async function buildAdminDisciplinesModalView({ discipline, showInactive }) {
         }
       ]
     });
-  });
+    activeShown++;
+  }
 
-  if (active.length > 40) {
-    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `_Showing first 40 of ${active.length} active members_` }] });
+  if (activeShown < active.length) {
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `_Showing ${activeShown} of ${active.length} active members_` }] });
   }
 
   blocks.push({ type: 'divider' });
@@ -169,7 +173,10 @@ async function buildAdminDisciplinesModalView({ discipline, showInactive }) {
   });
 
   if (showInactive) {
-    inactive.slice(0, 40).forEach(u => {
+    // Reserve 1 block for a potential truncation context note at the end.
+    let inactiveShown = 0;
+    for (const u of inactive) {
+      if (blocks.length + 2 > 100 - 1) break;
       blocks.push({
         type: 'section',
         text: { type: 'mrkdwn', text: `*${u.name}* (<@${u.slackId}>)\nRelease team: *${u.onReleaseTeam ? 'Yes' : 'No'}*` }
@@ -193,10 +200,11 @@ async function buildAdminDisciplinesModalView({ discipline, showInactive }) {
           }
         ]
       });
-    });
+      inactiveShown++;
+    }
 
-    if (inactive.length > 40) {
-      blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `_Showing first 40 of ${inactive.length} inactive members_` }] });
+    if (inactiveShown < inactive.length) {
+      blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `_Showing ${inactiveShown} of ${inactive.length} inactive members_` }] });
     }
   } else {
     blocks.push({

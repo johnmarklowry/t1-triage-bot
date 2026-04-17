@@ -14,6 +14,7 @@ const isolatedSuites = new Set([
   'tests/unit/a04-triageLogic.scheduler.test.js',
   'tests/unit/a05-triageLogic.reconcile.test.js',
   'tests/unit/snapshotService.recordAlign.test.js',
+  'tests/unit/slackNotifier.updateChannelTopic.test.js',
 ]);
 
 function walk(dir) {

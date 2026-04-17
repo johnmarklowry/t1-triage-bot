@@ -142,6 +142,10 @@ To ensure rotation notifications run on infrastructure-managed cron instead of t
 
 6. **Avoid duplicate schedulers**  
    - Keep `ENABLE_IN_APP_CRON` unset or not `true` in production when Railway cron is authoritative. Running both the in-app 5PM/8AM jobs and Railway’s `POST /jobs/railway/notify-rotation` can duplicate Slack updates or notifications. The server logs a warning if `ENABLE_IN_APP_CRON=true`.
+   - In the Railway dashboard, ensure **only one** cron trigger targets `POST /jobs/railway/notify-rotation` (duplicate triggers can double-run the job).
 
 7. **Admin pre-alignment of snapshots**  
    - When an admin applies the current sprint rotation (`applyCurrentSprintRotation` / on-call admin modal), the app records a `notification_snapshots` row with reason `admin pre-aligned` so the next Railway cron run matches the assignment hash and takes the **skipped** path instead of redoing redundant Slack group/topic work for the same roster.
+
+8. **Channel topic idempotency**  
+   - `updateChannelTopic` calls `conversations.info` and skips `conversations.setTopic` when the desired topic text already matches the channel, reducing duplicate “set the channel topic” system messages if multiple code paths run. The bot token must be able to read the triage channel (OAuth scopes that allow **`conversations.info`**, e.g. **`channels:read`** for public channels).

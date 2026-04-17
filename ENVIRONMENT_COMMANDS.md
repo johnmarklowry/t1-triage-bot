@@ -139,3 +139,9 @@ To ensure rotation notifications run on infrastructure-managed cron instead of t
 5. **Verification**  
    - Use the quickstart guide in `specs/004-notification-updates/quickstart.md` to simulate cron invocations.  
    - Confirm `notification_snapshots` and `cron_trigger_audits` tables receive new entries per trigger.
+
+6. **Avoid duplicate schedulers**  
+   - Keep `ENABLE_IN_APP_CRON` unset or not `true` in production when Railway cron is authoritative. Running both the in-app 5PM/8AM jobs and Railway’s `POST /jobs/railway/notify-rotation` can duplicate Slack updates or notifications. The server logs a warning if `ENABLE_IN_APP_CRON=true`.
+
+7. **Admin pre-alignment of snapshots**  
+   - When an admin applies the current sprint rotation (`applyCurrentSprintRotation` / on-call admin modal), the app records a `notification_snapshots` row with reason `admin pre-aligned` so the next Railway cron run matches the assignment hash and takes the **skipped** path instead of redoing redundant Slack group/topic work for the same roster.

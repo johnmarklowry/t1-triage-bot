@@ -654,7 +654,6 @@ async function reconcileCurrentStateAfterUserDeactivated(slackId) {
     const newUserArray = rolesToArray(newRoles);
     await updateOnCallUserGroup(newUserArray);
     await updateChannelTopic(newUserArray);
-    await recordAdminPreAlignedSnapshot(newRoles);
     return { reconciled: true };
   } catch (err) {
     console.error('[reconcileCurrentStateAfterUserDeactivated]', err);

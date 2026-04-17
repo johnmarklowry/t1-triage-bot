@@ -35,7 +35,6 @@ describe('slackNotifier updateChannelTopic', () => {
   beforeEach(() => {
     mock.clearAllMocks();
     resetModuleCache([slackNotifierPath]);
-    delete require.cache[require.resolve(slackNotifierPath)];
     process.env.BUG_TRIAGE_CHANNEL_ID = 'C_BUG_TRIAGE';
     process.env.SLACK_BOT_TOKEN = 'xoxb-test';
     ({ updateChannelTopic } = require(slackNotifierPath));
@@ -100,7 +99,6 @@ describe('slackNotifier updateChannelTopic', () => {
   it('does not call Slack when BUG_TRIAGE_CHANNEL_ID is missing', async () => {
     delete process.env.BUG_TRIAGE_CHANNEL_ID;
     resetModuleCache([slackNotifierPath]);
-    delete require.cache[require.resolve(slackNotifierPath)];
     ({ updateChannelTopic } = require(slackNotifierPath));
 
     await updateChannelTopic(['U1']);

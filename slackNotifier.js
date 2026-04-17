@@ -43,29 +43,59 @@ async function notifyAdmins(text) {
 }
 
 /**
+ * Reads normalized topic text from a conversations.info channel payload.
+ * @param {{ topic?: string | { value?: string } }} [channel]
+ */
+function getChannelTopicValue(channel) {
+  const t = channel?.topic;
+  if (t == null) return '';
+  if (typeof t === 'string') return t;
+  if (typeof t === 'object' && 'value' in t && typeof t.value === 'string') return t.value;
+  return '';
+}
+
+/**
  * Updates the channel topic for the bug triage channel.
  * The topic is set to:
  * "Bug Link Only - keep conversations in threads.
  *  Triage Team: {New Triage Members}"
+ *
+ * Skips conversations.setTopic when the channel already has the same topic (avoids duplicate Slack system messages when multiple jobs call this).
  */
 async function updateChannelTopic(userIdsArray) {
+  const channelId = process.env.BUG_TRIAGE_CHANNEL_ID;
+  if (!channelId) {
+    console.warn('[updateChannelTopic] BUG_TRIAGE_CHANNEL_ID is not set; skipping.');
+    return;
+  }
+
   try {
     // Format the user IDs as @mentions
     const mentionList = userIdsArray.map(id => `<@${id}>`).join(', ');
-    
-    // Create the full topic message
-    const newTopic = 
+
+    const newTopic =
       `Bug Link Only - keep conversations in threads.\n` +
       `Triage Team: ${mentionList}`;
-    
+
+    try {
+      const infoRes = await slackClient.conversations.info({ channel: channelId });
+      const current = getChannelTopicValue(infoRes.channel);
+      if (current === newTopic) {
+        console.log(`[updateChannelTopic] Unchanged; skipping setTopic for channel ${channelId}.`);
+        return;
+      }
+    } catch (infoErr) {
+      console.warn('[updateChannelTopic] conversations.info failed; proceeding with setTopic:', infoErr?.message || infoErr);
+    }
+
     await slackClient.conversations.setTopic({
-      channel: process.env.BUG_TRIAGE_CHANNEL_ID,
+      channel: channelId,
       topic: newTopic
     });
-    console.log(`[updateChannelTopic] Channel ${process.env.BUG_TRIAGE_CHANNEL_ID} topic updated.`);
+    console.log(`[updateChannelTopic] Channel ${channelId} topic updated.`);
   } catch (err) {
     console.error('[updateChannelTopic] Error:', err);
-    await notifyAdmins(`Error updating channel topic for ${process.env.BUG_TRIAGE_CHANNEL_ID}: ${err.message}`);
+    await notifyAdmins(`Error updating channel topic for ${channelId}: ${err.message}`);
   }
 }
 

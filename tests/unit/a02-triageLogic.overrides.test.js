@@ -11,6 +11,7 @@ const notifyRotationChangesMock = mock();
 const updateOnCallUserGroupMock = mock();
 const updateChannelTopicMock = mock();
 const notifyAdminsMock = mock();
+const recordAlignMock = mock(() => Promise.resolve({ id: 1 }));
 
 mock.module('../../dataUtils', () => ({
   readCurrentState: readCurrentStateMock,
@@ -30,6 +31,10 @@ mock.module('../../slackNotifier', () => ({
   updateOnCallUserGroup: updateOnCallUserGroupMock,
   updateChannelTopic: updateChannelTopicMock,
   notifyRotationChanges: notifyRotationChangesMock,
+}));
+
+mock.module('../../services/notifications/snapshotService', () => ({
+  recordAdminPreAlignedSnapshot: recordAlignMock,
 }));
 
 // Force fresh load so triageLogic uses our mocked dataUtils/slackNotifier (avoids cache from other files)
@@ -71,6 +76,7 @@ describe('triageLogic override/rotation', () => {
       expect(updateOnCallUserGroupMock).toHaveBeenCalledTimes(1);
       expect(updateChannelTopicMock).toHaveBeenCalledTimes(1);
       expect(saveCurrentStateMock).toHaveBeenCalledTimes(1);
+      expect(recordAlignMock).toHaveBeenCalledTimes(1);
       expect(getSprintUsersMock).toHaveBeenCalledWith(0, { usePersistedForCurrentSprint: false });
     });
 
@@ -89,6 +95,7 @@ describe('triageLogic override/rotation', () => {
       expect(result).toEqual({ updated: false, affectedUserIds: [] });
       expect(notifyRotationChangesMock).not.toHaveBeenCalled();
       expect(saveCurrentStateMock).not.toHaveBeenCalled();
+      expect(recordAlignMock).not.toHaveBeenCalled();
     });
 
     it('returns updated: false when no current sprint', async () => {
@@ -98,6 +105,7 @@ describe('triageLogic override/rotation', () => {
 
       expect(result).toEqual({ updated: false, affectedUserIds: [] });
       expect(getSprintUsersMock).not.toHaveBeenCalled();
+      expect(recordAlignMock).not.toHaveBeenCalled();
     });
   });
 
@@ -127,6 +135,7 @@ describe('triageLogic override/rotation', () => {
       expect(updateOnCallUserGroupMock).toHaveBeenCalledTimes(1);
       expect(updateChannelTopicMock).toHaveBeenCalledTimes(1);
       expect(saveCurrentStateMock).toHaveBeenCalledTimes(1);
+      expect(recordAlignMock).toHaveBeenCalledTimes(1);
     });
 
     it('returns updated: false when newRoles match current state', async () => {
@@ -150,6 +159,7 @@ describe('triageLogic override/rotation', () => {
       expect(result).toEqual({ updated: false, affectedUserIds: [] });
       expect(notifyRotationChangesMock).not.toHaveBeenCalled();
       expect(saveCurrentStateMock).not.toHaveBeenCalled();
+      expect(recordAlignMock).not.toHaveBeenCalled();
     });
 
     it('returns updated: false when no current sprint', async () => {
@@ -159,6 +169,7 @@ describe('triageLogic override/rotation', () => {
 
       expect(result).toEqual({ updated: false, affectedUserIds: [] });
       expect(readCurrentStateMock).not.toHaveBeenCalled();
+      expect(recordAlignMock).not.toHaveBeenCalled();
     });
   });
 });

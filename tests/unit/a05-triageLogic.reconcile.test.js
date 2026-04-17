@@ -6,7 +6,6 @@ const findCurrentSprintMock = mock();
 const readCurrentStateMock = mock();
 const getSprintUsersMock = mock();
 const saveCurrentStateMock = mock(() => Promise.resolve());
-const recordAlignMock = mock(() => Promise.resolve({ id: 1 }));
 const cacheDelMock = mock(() => Promise.resolve());
 const updateOnCallUserGroupMock = mock(() => Promise.resolve());
 const updateChannelTopicMock = mock(() => Promise.resolve());
@@ -25,10 +24,6 @@ mock.module('../../slackNotifier', () => ({
   updateOnCallUserGroup: updateOnCallUserGroupMock,
   updateChannelTopic: updateChannelTopicMock,
   notifyRotationChanges: mock(() => Promise.resolve()),
-}));
-
-mock.module('../../services/notifications/snapshotService', () => ({
-  recordAdminPreAlignedSnapshot: recordAlignMock,
 }));
 
 mock.module('../../cache/redisClient', () => ({
@@ -57,10 +52,9 @@ describe('reconcileCurrentStateAfterUserDeactivated', () => {
     const r = await reconcileCurrentStateAfterUserDeactivated('U999');
     expect(r.reconciled).toBe(false);
     expect(saveCurrentStateMock).not.toHaveBeenCalled();
-    expect(recordAlignMock).not.toHaveBeenCalled();
   });
 
-  it('recomputes roles, saves state, clears cache, and aligns snapshot when user is on-call', async () => {
+  it('recomputes roles, saves state, clears cache, and updates Slack when user is on-call', async () => {
     findCurrentSprintMock.mockResolvedValue({ index: 2 });
     readCurrentStateMock.mockResolvedValue({
       sprintIndex: 2,
@@ -86,6 +80,5 @@ describe('reconcileCurrentStateAfterUserDeactivated', () => {
     expect(cacheDelMock).toHaveBeenCalledWith('sprintUsers:2');
     expect(updateOnCallUserGroupMock).toHaveBeenCalledWith(['UNEW']);
     expect(updateChannelTopicMock).toHaveBeenCalledWith(['UNEW']);
-    expect(recordAlignMock).toHaveBeenCalledWith(newRoles);
   });
 });

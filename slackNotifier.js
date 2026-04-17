@@ -78,7 +78,8 @@ async function updateReleasesChannelTopic(userIdsArray) {
   }
 
   try {
-    const mentionList = (Array.isArray(userIdsArray) ? userIdsArray : []).map(id => `<@${id}>`).join(', ');
+    const uniqueIds = [...new Set((Array.isArray(userIdsArray) ? userIdsArray : []).filter(Boolean))];
+    const mentionList = uniqueIds.map(id => `<@${id}>`).join(', ');
     const newTopic =
       `Release ownership for upcoming sprint.\n` +
       `Release Team: ${mentionList || '(none configured)'}`;

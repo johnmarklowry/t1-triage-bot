@@ -572,6 +572,43 @@ slackApp.action('admin_disciplines_reactivate', async ({ ack, body, client, logg
 });
 
 /**
+ * admin_disciplines_toggle_release_team: toggle release-team participation per roster row
+ */
+slackApp.action('admin_disciplines_toggle_release_team', async ({ ack, body, client, logger, action }) => {
+  await ack();
+  try {
+    const payload = JSON.parse(action.value || '{}');
+    const slackId = payload.slackId;
+    const discipline = payload.discipline || (JSON.parse(body.view.private_metadata || '{}').discipline || 'account');
+    const onReleaseTeam = payload.onReleaseTeam === true;
+    if (!slackId || !discipline) return;
+
+    const useDatabase =
+      process.env.USE_DATABASE !== 'false' &&
+      !!process.env.DATABASE_URL;
+
+    if (useDatabase) {
+      await UsersRepository.setReleaseTeamFlag(slackId, discipline, onReleaseTeam, body.user?.id || 'system');
+      await cache.del('disciplines:all');
+    } else {
+      const sourceFile = getDisciplinesSourceFile();
+      const disciplinesObj = loadJSON(sourceFile) || {};
+      const members = Array.isArray(disciplinesObj[discipline]) ? disciplinesObj[discipline] : [];
+      disciplinesObj[discipline] = members.map(m => (
+        m?.slackId === slackId ? { ...m, onReleaseTeam } : m
+      ));
+      saveJSON(sourceFile, disciplinesObj);
+    }
+
+    const meta = JSON.parse(body.view.private_metadata || '{}');
+    const view = await buildAdminDisciplinesModalView({ discipline, showInactive: !!meta.showInactive });
+    await client.views.update({ view_id: body.view.id, hash: body.view.hash, view });
+  } catch (error) {
+    logger?.error?.('Error toggling release-team flag:', error);
+  }
+});
+
+/**
  * admin_disciplines_add_member: push add-member form
  */
 slackApp.action('admin_disciplines_add_member', async ({ ack, body, client, logger, action }) => {
@@ -614,6 +651,22 @@ slackApp.action('admin_disciplines_add_member', async ({ ack, body, client, logg
           block_id: 'member_slack_id',
           label: { type: 'plain_text', text: 'Slack user' },
           element: { type: 'users_select', action_id: 'member_slack_id_input' }
+        },
+        {
+          type: 'input',
+          optional: true,
+          block_id: 'release_team',
+          label: { type: 'plain_text', text: 'Release team participation' },
+          element: {
+            type: 'checkboxes',
+            action_id: 'release_team_input',
+            options: [
+              {
+                text: { type: 'plain_text', text: 'Include this member in release-team eligibility' },
+                value: 'on_release_team'
+              }
+            ]
+          }
         }
       ]
     };
@@ -637,6 +690,9 @@ slackApp.view('admin_disciplines_add_member_modal', async ({ ack, body, view, cl
 
     const slackId = view.state.values.member_slack_id.member_slack_id_input.selected_user;
     if (!slackId) throw new Error('Slack user is required.');
+    const selectedReleaseOptions =
+      view.state.values?.release_team?.release_team_input?.selected_options || [];
+    const onReleaseTeam = selectedReleaseOptions.some(opt => opt?.value === 'on_release_team');
 
     // Derive name from Slack profile (avoids manual, potentially wrong input)
     let name = slackId;
@@ -660,7 +716,7 @@ slackApp.view('admin_disciplines_add_member_modal', async ({ ack, body, view, cl
       !!process.env.DATABASE_URL;
 
     if (useDatabase) {
-      await UsersRepository.addUser(slackId, name, discipline, body.user?.id || 'system');
+      await UsersRepository.addUser(slackId, name, discipline, body.user?.id || 'system', onReleaseTeam);
       await cache.del('disciplines:all');
     } else {
       const sourceFile = getDisciplinesSourceFile();
@@ -668,9 +724,9 @@ slackApp.view('admin_disciplines_add_member_modal', async ({ ack, body, view, cl
       if (!disciplinesObj[discipline]) disciplinesObj[discipline] = [];
       const idx = disciplinesObj[discipline].findIndex(m => m?.slackId === slackId);
       if (idx >= 0) {
-        disciplinesObj[discipline][idx] = { ...disciplinesObj[discipline][idx], name, active: true };
+        disciplinesObj[discipline][idx] = { ...disciplinesObj[discipline][idx], name, active: true, onReleaseTeam };
       } else {
-        disciplinesObj[discipline].push({ name, slackId, active: true });
+        disciplinesObj[discipline].push({ name, slackId, active: true, onReleaseTeam });
       }
       saveJSON(sourceFile, disciplinesObj);
     }

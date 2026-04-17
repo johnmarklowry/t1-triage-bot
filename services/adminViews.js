@@ -61,7 +61,8 @@ async function getDisciplineMembersIncludingInactive(discipline) {
     .map(m => ({
       slackId: m.slackId,
       name: m.name || m.slackId,
-      active: m.active !== false
+      active: m.active !== false,
+      onReleaseTeam: m.onReleaseTeam === true
     }));
 
   return {
@@ -122,15 +123,26 @@ async function buildAdminDisciplinesModalView({ discipline, showInactive }) {
   active.slice(0, 40).forEach(u => {
     blocks.push({
       type: 'section',
-      text: { type: 'mrkdwn', text: `*${u.name}* (<@${u.slackId}>)` },
-      accessory: {
-        type: 'button',
-        text: { type: 'plain_text', text: 'Remove from rotations' },
-        style: 'danger',
-        action_id: 'admin_disciplines_deactivate',
-        value: JSON.stringify({ slackId: u.slackId, discipline: selected }),
-        confirm: deactivateConfirm
-      }
+      text: { type: 'mrkdwn', text: `*${u.name}* (<@${u.slackId}>)\nRelease team: *${u.onReleaseTeam ? 'Yes' : 'No'}*` }
+    });
+    blocks.push({
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Remove from rotations' },
+          style: 'danger',
+          action_id: 'admin_disciplines_deactivate',
+          value: JSON.stringify({ slackId: u.slackId, discipline: selected }),
+          confirm: deactivateConfirm
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: u.onReleaseTeam ? 'Unset release team' : 'Set release team' },
+          action_id: 'admin_disciplines_toggle_release_team',
+          value: JSON.stringify({ slackId: u.slackId, discipline: selected, onReleaseTeam: !u.onReleaseTeam })
+        }
+      ]
     });
   });
 
@@ -160,15 +172,26 @@ async function buildAdminDisciplinesModalView({ discipline, showInactive }) {
     inactive.slice(0, 40).forEach(u => {
       blocks.push({
         type: 'section',
-        text: { type: 'mrkdwn', text: `*${u.name}* (<@${u.slackId}>)` },
-        accessory: {
-          type: 'button',
-          text: { type: 'plain_text', text: 'Reactivate' },
-          style: 'primary',
-          action_id: 'admin_disciplines_reactivate',
-          value: JSON.stringify({ slackId: u.slackId, discipline: selected }),
-          confirm: reactivateConfirm
-        }
+        text: { type: 'mrkdwn', text: `*${u.name}* (<@${u.slackId}>)\nRelease team: *${u.onReleaseTeam ? 'Yes' : 'No'}*` }
+      });
+      blocks.push({
+        type: 'actions',
+        elements: [
+          {
+            type: 'button',
+            text: { type: 'plain_text', text: 'Reactivate' },
+            style: 'primary',
+            action_id: 'admin_disciplines_reactivate',
+            value: JSON.stringify({ slackId: u.slackId, discipline: selected }),
+            confirm: reactivateConfirm
+          },
+          {
+            type: 'button',
+            text: { type: 'plain_text', text: u.onReleaseTeam ? 'Unset release team' : 'Set release team' },
+            action_id: 'admin_disciplines_toggle_release_team',
+            value: JSON.stringify({ slackId: u.slackId, discipline: selected, onReleaseTeam: !u.onReleaseTeam })
+          }
+        ]
       });
     });
 

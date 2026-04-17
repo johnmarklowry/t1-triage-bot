@@ -50,6 +50,14 @@ const CACHE_TTLS = {
   sprintUsers: 60 // 60s
 };
 
+const ROLE_DISCIPLINE_MAP = {
+  account: 'account',
+  producer: 'producer',
+  po: 'po',
+  uiEng: 'uiEng',
+  beEng: 'beEng'
+};
+
 async function cacheGetOrSetJson(key, ttlSeconds, fetchFn) {
   const cached = await cache.getJson(key);
   if (cached !== null && cached !== undefined) return cached;
@@ -341,7 +349,12 @@ async function readDisciplines() {
     // Filter out inactive users (kept in data for admin visibility, excluded from rotations)
     for (const [discipline, users] of Object.entries(disciplines)) {
       if (!Array.isArray(users)) continue;
-      disciplines[discipline] = users.filter(u => u?.active !== false);
+      disciplines[discipline] = users
+        .filter(u => u?.active !== false)
+        .map(u => ({
+          ...u,
+          onReleaseTeam: u?.onReleaseTeam === true
+        }));
     }
     
     // Validate that no user appears in multiple disciplines
@@ -405,8 +418,73 @@ async function readDisciplines() {
     const sourceFile = (IS_STAGING && fs.existsSync(DISCIPLINES_STAGING_FILE))
       ? DISCIPLINES_STAGING_FILE
       : DISCIPLINES_FILE;
-    return loadJSON(sourceFile) || {};
+    const raw = loadJSON(sourceFile) || {};
+    for (const [discipline, users] of Object.entries(raw)) {
+      if (!Array.isArray(users)) continue;
+      raw[discipline] = users
+        .filter(u => u?.active !== false)
+        .map(u => ({
+          ...u,
+          onReleaseTeam: u?.onReleaseTeam === true
+        }));
+    }
+    return raw;
   }
+}
+
+/**
+ * Find the sprint whose start date is tomorrow in Pacific time.
+ * Returns null when none exist. Throws on duplicate matches (data integrity issue).
+ */
+async function findSprintStartingTomorrowPT() {
+  const sprints = await readSprints();
+  const tomorrowPT = getTodayPT().add(1, 'day');
+  const matches = (Array.isArray(sprints) ? sprints : []).filter(s => {
+    const startDate = normalizeDateOnly(s?.startDate);
+    const start = parsePTDate(startDate);
+    return !!start && start.isSame(tomorrowPT, 'day');
+  });
+
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    throw new Error(`[findSprintStartingTomorrowPT] Multiple sprints match tomorrow PT (${tomorrowPT.format('YYYY-MM-DD')}).`);
+  }
+
+  const sprint = matches[0];
+  const sprintIndex = Number.isFinite(Number(sprint?.sprintIndex))
+    ? Number(sprint.sprintIndex)
+    : Number.isFinite(Number(sprint?.index))
+      ? Number(sprint.index)
+      : null;
+
+  if (sprintIndex === null) {
+    throw new Error('[findSprintStartingTomorrowPT] Matching sprint is missing numeric sprintIndex.');
+  }
+
+  return { ...sprint, index: sprintIndex };
+}
+
+/**
+ * Compute release-team user IDs for a sprint by filtering assignees to members with onReleaseTeam=true.
+ */
+async function computeReleaseTeamUserIdsForSprint(sprintIndex) {
+  const [roles, disciplines] = await Promise.all([
+    getSprintUsers(sprintIndex, { usePersistedForCurrentSprint: false }),
+    readDisciplines()
+  ]);
+
+  const userIds = [];
+  for (const [role, discipline] of Object.entries(ROLE_DISCIPLINE_MAP)) {
+    const assigneeSlackId = roles?.[role];
+    if (!assigneeSlackId) continue;
+    const members = Array.isArray(disciplines?.[discipline]) ? disciplines[discipline] : [];
+    const member = members.find(u => u?.slackId === assigneeSlackId);
+    if (member?.onReleaseTeam === true) {
+      userIds.push(assigneeSlackId);
+    }
+  }
+
+  return [...new Set(userIds)];
 }
 
 /**
@@ -843,6 +921,8 @@ module.exports = {
   getSprintUsers,
   getUpcomingSprints,
   refreshCurrentState,
+  findSprintStartingTomorrowPT,
+  computeReleaseTeamUserIdsForSprint,
   upsertSprint,
   
   // File path constants

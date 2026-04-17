@@ -35,6 +35,7 @@ model User {
   name       String    @db.VarChar(100)
   discipline String    @db.VarChar(20)
   active     Boolean   @default(true) @map("active")
+  onReleaseTeam Boolean @default(false) @map("on_release_team")
   createdAt  DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
   updatedAt  DateTime? @default(now()) @map("updated_at") @db.Timestamp(6)
 

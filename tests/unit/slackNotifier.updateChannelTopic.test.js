@@ -6,6 +6,7 @@ restoreAllMocks();
 
 const conversationsInfoMock = mock();
 const conversationsSetTopicMock = mock();
+const chatPostMessageMock = mock();
 
 mock.module('@slack/web-api', () => ({
   WebClient: class WebClient {
@@ -13,6 +14,9 @@ mock.module('@slack/web-api', () => ({
       this.conversations = {
         info: (...args) => conversationsInfoMock(...args),
         setTopic: (...args) => conversationsSetTopicMock(...args),
+      };
+      this.chat = {
+        postMessage: (...args) => chatPostMessageMock(...args),
       };
     }
   },
@@ -31,12 +35,14 @@ describe('slackNotifier updateChannelTopic', () => {
   let updateChannelTopic;
   const origChannel = process.env.BUG_TRIAGE_CHANNEL_ID;
   const origToken = process.env.SLACK_BOT_TOKEN;
+  const origAdminChannel = process.env.ADMIN_CHANNEL_ID;
 
   beforeEach(() => {
     mock.clearAllMocks();
     resetModuleCache([slackNotifierPath]);
     process.env.BUG_TRIAGE_CHANNEL_ID = 'C_BUG_TRIAGE';
     process.env.SLACK_BOT_TOKEN = 'xoxb-test';
+    process.env.ADMIN_CHANNEL_ID = 'C_ADMIN';
     ({ updateChannelTopic } = require(slackNotifierPath));
   });
 
@@ -45,6 +51,8 @@ describe('slackNotifier updateChannelTopic', () => {
     else process.env.BUG_TRIAGE_CHANNEL_ID = origChannel;
     if (origToken === undefined) delete process.env.SLACK_BOT_TOKEN;
     else process.env.SLACK_BOT_TOKEN = origToken;
+    if (origAdminChannel === undefined) delete process.env.ADMIN_CHANNEL_ID;
+    else process.env.ADMIN_CHANNEL_ID = origAdminChannel;
   });
 
   it('skips setTopic when conversations.info topic matches the desired topic', async () => {
@@ -89,6 +97,42 @@ describe('slackNotifier updateChannelTopic', () => {
 
     await updateChannelTopic(userIds);
 
+    expect(conversationsSetTopicMock).toHaveBeenCalledTimes(1);
+    expect(conversationsSetTopicMock.mock.calls[0][0]).toEqual({
+      channel: 'C_BUG_TRIAGE',
+      topic: expectedTopic,
+    });
+  });
+
+  it('skips setTopic and notifies admins once when conversations.info has missing_scope', async () => {
+    const missingScopeError = new Error('missing_scope');
+    missingScopeError.data = { error: 'missing_scope' };
+    conversationsInfoMock.mockRejectedValue(missingScopeError);
+    conversationsSetTopicMock.mockResolvedValue({ ok: true });
+    chatPostMessageMock.mockResolvedValue({ ok: true });
+
+    await updateChannelTopic(['U1']);
+    await updateChannelTopic(['U1']);
+
+    expect(conversationsInfoMock).toHaveBeenCalledTimes(2);
+    expect(conversationsSetTopicMock).not.toHaveBeenCalled();
+    expect(chatPostMessageMock).toHaveBeenCalledTimes(1);
+    expect(chatPostMessageMock.mock.calls[0][0]).toEqual({
+      channel: 'C_ADMIN',
+      text: expect.stringContaining('missing_scope'),
+    });
+  });
+
+  it('skips repeated same-topic setTopic attempts inside the in-process TTL when conversations.info fails', async () => {
+    const userIds = ['U_REPEAT'];
+    const expectedTopic = topicForUserIds(userIds);
+    conversationsInfoMock.mockRejectedValue(new Error('network'));
+    conversationsSetTopicMock.mockResolvedValue({ ok: true });
+
+    await updateChannelTopic(userIds);
+    await updateChannelTopic(userIds);
+
+    expect(conversationsInfoMock).toHaveBeenCalledTimes(2);
     expect(conversationsSetTopicMock).toHaveBeenCalledTimes(1);
     expect(conversationsSetTopicMock.mock.calls[0][0]).toEqual({
       channel: 'C_BUG_TRIAGE',

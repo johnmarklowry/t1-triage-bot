@@ -1,14 +1,24 @@
 /********************************
  * slackNotifier.js
  ********************************/
+const crypto = require('crypto');
 const { WebClient } = require('@slack/web-api');
 const config = require('./config');
 const slackClient = new WebClient(process.env.SLACK_BOT_TOKEN);
 
 const STAGING_USERGROUP_HANDLE = 'triage-oncall-staging';
 const STAGING_USERGROUP_NAME = 'Triage On-Call (Staging)';
+const TOPIC_DEDUPE_TTL_MS = 10 * 60 * 1000;
+const NON_TRANSIENT_TOPIC_READ_ERRORS = new Set([
+  'missing_scope',
+  'not_in_channel',
+  'channel_not_found',
+  'invalid_auth'
+]);
 let _stagingUserGroupId = null;
 let _stagingUserGroupIdLogged = false;
+const recentTopicAttemptsByChannel = new Map();
+const notifiedTopicReadFailures = new Set();
 
 /**
  * Sends a direct message to a user.
@@ -54,6 +64,40 @@ function getChannelTopicValue(channel) {
   return '';
 }
 
+function getSlackErrorCode(err) {
+  return err?.data?.error || err?.code || err?.message || 'unknown_error';
+}
+
+function getTopicHash(topic) {
+  return crypto.createHash('sha256').update(topic).digest('hex').slice(0, 12);
+}
+
+function hasRecentTopicAttempt(channelId, topicHash) {
+  const recent = recentTopicAttemptsByChannel.get(channelId);
+  if (!recent) return false;
+  if (recent.expiresAt <= Date.now()) {
+    recentTopicAttemptsByChannel.delete(channelId);
+    return false;
+  }
+  return recent.topicHash === topicHash;
+}
+
+function rememberTopicAttempt(channelId, topicHash) {
+  recentTopicAttemptsByChannel.set(channelId, {
+    topicHash,
+    expiresAt: Date.now() + TOPIC_DEDUPE_TTL_MS
+  });
+}
+
+async function notifyTopicReadFailureOnce(channelId, readFailureCode) {
+  const key = `${channelId}:${readFailureCode}`;
+  if (notifiedTopicReadFailures.has(key)) return;
+  notifiedTopicReadFailures.add(key);
+  await notifyAdmins(
+    `Cannot verify Slack channel topic for ${channelId} (${readFailureCode}); skipped setTopic to avoid duplicate channel-topic system messages.`
+  );
+}
+
 /**
  * Updates the channel topic for the bug triage channel.
  * The topic is set to:
@@ -76,6 +120,7 @@ async function updateChannelTopic(userIdsArray) {
     const newTopic =
       `Bug Link Only - keep conversations in threads.\n` +
       `Triage Team: ${mentionList}`;
+    const desiredTopicHash = getTopicHash(newTopic);
 
     try {
       const infoRes = await slackClient.conversations.info({ channel: channelId });
@@ -85,13 +130,25 @@ async function updateChannelTopic(userIdsArray) {
         return;
       }
     } catch (infoErr) {
-      console.warn('[updateChannelTopic] conversations.info failed; proceeding with setTopic:', infoErr?.message || infoErr);
+      const readFailureCode = getSlackErrorCode(infoErr);
+      const logData = { channelId, desiredTopicHash, readFailureCode };
+      if (NON_TRANSIENT_TOPIC_READ_ERRORS.has(readFailureCode)) {
+        console.warn('[updateChannelTopic] conversations.info failed; skipping setTopic for non-transient read failure:', logData);
+        await notifyTopicReadFailureOnce(channelId, readFailureCode);
+        return;
+      }
+      if (hasRecentTopicAttempt(channelId, desiredTopicHash)) {
+        console.warn('[updateChannelTopic] conversations.info failed; skipping recent duplicate setTopic attempt:', logData);
+        return;
+      }
+      console.warn('[updateChannelTopic] conversations.info failed; proceeding with setTopic:', logData);
     }
 
     await slackClient.conversations.setTopic({
       channel: channelId,
       topic: newTopic
     });
+    rememberTopicAttempt(channelId, desiredTopicHash);
     console.log(`[updateChannelTopic] Channel ${channelId} topic updated.`);
   } catch (err) {
     console.error('[updateChannelTopic] Error:', err);

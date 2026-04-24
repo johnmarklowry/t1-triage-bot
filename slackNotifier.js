@@ -40,15 +40,17 @@ async function notifyUser(userId, text) {
 async function notifyAdmins(text) {
   if (!process.env.ADMIN_CHANNEL_ID) {
     console.error('[notifyAdmins] No ADMIN_CHANNEL_ID. Message:', text);
-    return;
+    return false;
   }
   try {
     await slackClient.chat.postMessage({
       channel: process.env.ADMIN_CHANNEL_ID,
       text: `[ERROR] ${text}`
     });
+    return true;
   } catch (err) {
     console.error('Failed to notify admins:', err);
+    return false;
   }
 }
 
@@ -92,10 +94,12 @@ function rememberTopicAttempt(channelId, topicHash) {
 async function notifyTopicReadFailureOnce(channelId, readFailureCode) {
   const key = `${channelId}:${readFailureCode}`;
   if (notifiedTopicReadFailures.has(key)) return;
-  notifiedTopicReadFailures.add(key);
-  await notifyAdmins(
+  const notified = await notifyAdmins(
     `Cannot verify Slack channel topic for ${channelId} (${readFailureCode}); skipped setTopic to avoid duplicate channel-topic system messages.`
   );
+  if (notified) {
+    notifiedTopicReadFailures.add(key);
+  }
 }
 
 /**

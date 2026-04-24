@@ -140,6 +140,39 @@ describe('slackNotifier updateChannelTopic', () => {
     });
   });
 
+  it('retries admin notification on next call when chatPostMessage fails', async () => {
+    const missingScopeError = new Error('missing_scope');
+    missingScopeError.data = { error: 'missing_scope' };
+    conversationsInfoMock.mockRejectedValue(missingScopeError);
+    conversationsSetTopicMock.mockResolvedValue({ ok: true });
+    chatPostMessageMock.mockRejectedValue(new Error('post_failed'));
+
+    await updateChannelTopic(['U1']);
+    await updateChannelTopic(['U1']);
+
+    expect(conversationsInfoMock).toHaveBeenCalledTimes(2);
+    expect(conversationsSetTopicMock).not.toHaveBeenCalled();
+    expect(chatPostMessageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries admin notification on next call when ADMIN_CHANNEL_ID is unset', async () => {
+    delete process.env.ADMIN_CHANNEL_ID;
+    resetModuleCache([slackNotifierPath]);
+    ({ updateChannelTopic } = require(slackNotifierPath));
+
+    const missingScopeError = new Error('missing_scope');
+    missingScopeError.data = { error: 'missing_scope' };
+    conversationsInfoMock.mockRejectedValue(missingScopeError);
+    conversationsSetTopicMock.mockResolvedValue({ ok: true });
+
+    await updateChannelTopic(['U1']);
+    await updateChannelTopic(['U1']);
+
+    expect(conversationsInfoMock).toHaveBeenCalledTimes(2);
+    expect(conversationsSetTopicMock).not.toHaveBeenCalled();
+    expect(chatPostMessageMock).not.toHaveBeenCalled();
+  });
+
   it('does not call Slack when BUG_TRIAGE_CHANNEL_ID is missing', async () => {
     delete process.env.BUG_TRIAGE_CHANNEL_ID;
     resetModuleCache([slackNotifierPath]);

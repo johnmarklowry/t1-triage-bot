@@ -30,6 +30,8 @@ const {
   buildAdminSprintsModalView,
   buildAdminUsersModalView
 } = require('./services/adminViews');
+const { saveSeverityPatch, getSeverityPatchRecord } = require('./repositories/severityContext');
+const { assembleOverlayPatchFromForm } = require('./services/severitySlaOverlayForm');
 
 /**
  * Prefer explicit display name; otherwise resolve from Slack users.info (same precedence as disciplines add-member).
@@ -916,6 +918,74 @@ slackApp.view('admin_users_add_modal', async ({ ack, body, view, client, logger 
 
 const ONCALL_UNASSIGNED_VALUE = '__none__';
 const ONCALL_ROLES = ['account', 'producer', 'po', 'uiEng', 'beEng'];
+
+slackApp.view('admin_severity_context_modal', async ({ ack, body, view, client, logger }) => {
+  try {
+    const vals = view.state?.values || {};
+    const glossaryInventory =
+      vals.severity_glossary_inventory?.severity_glossary_inventory_input?.value ?? '';
+    const glossarySiteSearch =
+      vals.severity_glossary_site_search?.severity_glossary_site_search_input?.value ?? '';
+    const advancedRaw =
+      vals.severity_advanced_json?.severity_advanced_json_input?.value ?? '';
+
+    let existingPatch = {};
+    try {
+      const record = await getSeverityPatchRecord();
+      existingPatch =
+        record?.patchJson && typeof record.patchJson === 'object' && !Array.isArray(record.patchJson)
+          ? record.patchJson
+          : {};
+    } catch (e) {
+      logger?.warn?.('[admin_severity_context_modal] failed to load existing patch', e);
+    }
+
+    let parsed;
+    try {
+      parsed = assembleOverlayPatchFromForm({
+        existingPatch,
+        glossaryInventory,
+        glossarySiteSearch,
+        advancedRaw
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await ack({
+        response_action: 'errors',
+        errors: { severity_advanced_json: msg.slice(0, 250) }
+      });
+      return;
+    }
+
+    try {
+      await saveSeverityPatch({ patchJson: parsed, updatedBy: body.user?.id || null });
+    } catch (error) {
+      logger?.error?.('[admin_severity_context_modal] save failed', error);
+      const hint =
+        error?.message && String(error.message).length <= 250
+          ? String(error.message)
+          : 'Save failed. Check DATABASE_URL, USE_DATABASE, and migrations.';
+      await ack({
+        response_action: 'errors',
+        errors: { severity_advanced_json: hint }
+      });
+      return;
+    }
+
+    await ack();
+
+    const adminChannelId = process.env.ADMIN_CHANNEL_ID;
+    if (adminChannelId) {
+      await client.chat.postMessage({
+        channel: adminChannelId,
+        text: `<@${body.user.id}> updated the *Severity SLA* overlay (merged onto \`sla-guidelines.json\`).`
+      });
+    }
+  } catch (error) {
+    logger?.error?.('[admin_severity_context_modal]', error);
+    await ack();
+  }
+});
 
 slackApp.view('admin_change_oncall_modal', async ({ ack, body, view, client, logger }) => {
   try {

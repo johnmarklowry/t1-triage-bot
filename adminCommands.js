@@ -30,6 +30,7 @@ const {
   buildAdminSprintsModalView,
   buildAdminUsersModalView
 } = require('./services/adminViews');
+const { saveSeverityPatch } = require('./repositories/severityContext');
 
 
 /**
@@ -902,6 +903,61 @@ slackApp.view('admin_users_add_modal', async ({ ack, body, view, client, logger 
 
 const ONCALL_UNASSIGNED_VALUE = '__none__';
 const ONCALL_ROLES = ['account', 'producer', 'po', 'uiEng', 'beEng'];
+
+slackApp.view('admin_severity_context_modal', async ({ ack, body, view, client, logger }) => {
+  try {
+    const raw = view.state?.values?.severity_patch_json?.severity_patch_json_input?.value ?? '';
+    const trimmed = String(raw).trim();
+
+    let parsed;
+    try {
+      parsed = JSON.parse(trimmed || '{}');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await ack({
+        response_action: 'errors',
+        errors: { severity_patch_json: `Invalid JSON: ${msg}` }
+      });
+      return;
+    }
+
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      await ack({
+        response_action: 'errors',
+        errors: { severity_patch_json: 'Must be a JSON object (not an array or primitive).' }
+      });
+      return;
+    }
+
+    try {
+      await saveSeverityPatch({ patchJson: parsed, updatedBy: body.user?.id || null });
+    } catch (error) {
+      logger?.error?.('[admin_severity_context_modal] save failed', error);
+      const hint =
+        error?.message && String(error.message).length <= 250
+          ? String(error.message)
+          : 'Save failed. Check DATABASE_URL, USE_DATABASE, and migrations.';
+      await ack({
+        response_action: 'errors',
+        errors: { severity_patch_json: hint }
+      });
+      return;
+    }
+
+    await ack();
+
+    const adminChannelId = process.env.ADMIN_CHANNEL_ID;
+    if (adminChannelId) {
+      await client.chat.postMessage({
+        channel: adminChannelId,
+        text: `<@${body.user.id}> updated the *Severity SLA* overlay (merged onto \`sla-guidelines.json\`).`
+      });
+    }
+  } catch (error) {
+    logger?.error?.('[admin_severity_context_modal]', error);
+    await ack();
+  }
+});
 
 slackApp.view('admin_change_oncall_modal', async ({ ack, body, view, client, logger }) => {
   try {

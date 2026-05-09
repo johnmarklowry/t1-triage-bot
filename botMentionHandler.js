@@ -4,9 +4,7 @@
  */
 const { slackApp } = require('./appHome');
 const axios = require('axios');
-
-// Load SLA guidelines from a configuration file
-const SLA_GUIDELINES = require('./sla-guidelines.json');
+const { getMergedSlaGuidelines } = require('./repositories/severityContext');
 
 // Configure JIRA API credentials
 const JIRA_CONFIG = {
@@ -22,6 +20,71 @@ const LLM_CONFIG = {
   apiUrl: process.env.LLM_API_URL,
   apiKey: process.env.LLM_API_KEY
 };
+
+const DEFAULT_SEVERITY_MODEL = 'gpt-4-turbo';
+
+function getSeverityModel() {
+  return process.env.OPENAI_SEVERITY_MODEL || DEFAULT_SEVERITY_MODEL;
+}
+
+function getJudgeModel() {
+  return process.env.OPENAI_JUDGE_MODEL || getSeverityModel();
+}
+
+/** Plain-text SLA guardrails (mirrors sla-guidelines metadata; repeated here so follow-ups always see them via system prompt). */
+const SEVERITY_DOMAIN_GUARDRAILS = `Severity classification rules you MUST follow:
+• Before citing Business Priority Level 1 for "Search Inventory Tool (SIT)", "L/Certified inventory search", or similar inventory-search criteria, confirm the issue is about inventory or certified-inventory search—not Lexus.com site-wide/header/content search.
+• Lexus.com site search issues must NOT be classified as Level 1 solely because search returns no or incorrect results if the only matching SLA bullets are inventory-search (SIT/L-Certified) criteria. Another independent Level 1 criterion must apply for Level 1.
+• When uncertain whether an issue is site search vs inventory search, state that ambiguity and avoid overstating severity.`;
+
+const GENERATOR_SYSTEM_PROMPT = `You are a bug severity assessment expert for Lexus.com. You analyze issues and determine their Business Priority Level according to established SLA criteria.
+
+${SEVERITY_DOMAIN_GUARDRAILS}
+
+Format your responses for Slack: use *asterisks for bold* (not markdown headers with #), use simple bullet points with • symbols, and keep formatting simple. You can engage in a conversation about your assessment, explaining your reasoning or reconsidering if the user provides additional context. Your assessments should be clear, structured, and grounded in facts from the provided information and SLA JSON only—do not invent SLA criteria.`;
+
+/**
+ * Strip basic HTML from Jira renderedFields description.
+ */
+function stripHtmlBasic(html) {
+  if (!html || typeof html !== 'string') return '';
+  return html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Extract plain text from Jira Atlassian Document Format (ADF).
+ */
+function extractPlainTextFromAdf(node) {
+  if (node == null) return '';
+  if (typeof node === 'string') return node;
+  if (typeof node !== 'object') return String(node);
+
+  let out = '';
+  if (node.text) out += node.text;
+  if (Array.isArray(node.content)) {
+    out += node.content.map(extractPlainTextFromAdf).join('');
+  }
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+function resolveJiraDescription(fieldsDescription, renderedDescription) {
+  const rendered = stripHtmlBasic(renderedDescription);
+  if (rendered) return rendered;
+
+  if (fieldsDescription && typeof fieldsDescription === 'object') {
+    const fromAdf = extractPlainTextFromAdf(fieldsDescription);
+    if (fromAdf) return fromAdf;
+  }
+
+  if (typeof fieldsDescription === 'string' && fieldsDescription.trim()) {
+    return fieldsDescription.trim();
+  }
+
+  return 'No description provided';
+}
 
 // Simple in-memory conversation tracking
 // In production, use a database for persistence
@@ -91,11 +154,12 @@ async function getJiraTicketDetails(ticketId) {
     
     const response = await axios.get(
       `${JIRA_CONFIG.baseUrl}/rest/api/3/issue/${ticketId}`,
-      { 
+      {
         auth: JIRA_CONFIG.auth,
         headers: {
-          'Accept': 'application/json'
-        }
+          Accept: 'application/json'
+        },
+        params: { expand: 'renderedFields' }
       }
     );
     
@@ -105,7 +169,10 @@ async function getJiraTicketDetails(ticketId) {
     return {
       id: ticketId,
       summary: response.data.fields.summary,
-      description: response.data.fields.description || 'No description provided',
+      description: resolveJiraDescription(
+        response.data.fields.description,
+        response.data.renderedFields?.description
+      ),
       priority: response.data.fields.priority?.name || 'Undefined',
       components: response.data.fields.components?.map(c => c.name) || [],
       labels: response.data.fields.labels || [],
@@ -158,19 +225,115 @@ function isFollowUpQuestion(text, conversationMemory) {
 }
 
 /**
- * Call OpenAI API to assess severity and recommend next steps
+ * Parse judge model output: VERDICT: APPROVE | VERDICT: REVISE + MESSAGE: ...
+ */
+function parseJudgeVerdict(raw) {
+  if (!raw || typeof raw !== 'string') return { verdict: 'UNKNOWN', revisedText: null };
+
+  const trimmed = raw.trim();
+  const approve = /^VERDICT:\s*APPROVE\b/im.exec(trimmed);
+  if (approve) return { verdict: 'APPROVE', revisedText: null };
+
+  const revise = /^VERDICT:\s*REVISE\b/im.exec(trimmed);
+  if (revise) {
+    const msgMatch = /\nMESSAGE:\s*([\s\S]+)/im.exec(trimmed);
+    if (msgMatch && msgMatch[1]) {
+      return { verdict: 'REVISE', revisedText: msgMatch[1].trim() };
+    }
+  }
+
+  return { verdict: 'UNKNOWN', revisedText: null };
+}
+
+/**
+ * Second-pass QA on draft severity assessment (optional different model via OPENAI_JUDGE_MODEL).
+ */
+async function judgeSeverityDraft(openai, { draftText, threadSummary, ticketDigest, slaGuidelines }) {
+  const slaPayload = slaGuidelines ? JSON.stringify(slaGuidelines, null, 2) : '{}';
+
+  const userContent = `
+DRAFT_ASSESSMENT (may contain errors):
+${draftText}
+
+THREAD_SUMMARY (may be truncated):
+${threadSummary || 'Not provided'}
+
+TICKET_DIGEST (may be truncated):
+${ticketDigest || 'Not provided'}
+
+SLA_GUIDELINES_JSON:
+${slaPayload}
+
+Your job:
+• Verify the draft only cites SLA objective criteria that exist in SLA_GUIDELINES_JSON and match the claimed severity level.
+• Enforce domain rules in metadata.domain_glossary if present: site search vs Search Inventory Tool / L-Certified inventory search must not be conflated.
+• If the draft classifies as Level 1 using only inventory-search bullets for what is clearly site search, or overstates HOT FIX without evidence, respond with REVISE and a corrected full user-facing message.
+• Keep Slack formatting: *bold* not # headers, • bullets.
+
+Respond in exactly this structure (no text before VERDICT):
+
+VERDICT: APPROVE
+
+OR
+
+VERDICT: REVISE
+MESSAGE:
+<full revised Slack-formatted assessment the user should see>
+`;
+
+  const response = await openai.chat.completions.create({
+    model: getJudgeModel(),
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You are an independent QA reviewer for Lexus.com bug severity assessments. You enforce SLA grounding and domain rules (site search vs inventory search). Output only the VERDICT block in the requested format—no preamble.'
+      },
+      { role: 'user', content: userContent }
+    ],
+    temperature: 0.1,
+    max_tokens: 1800
+  });
+
+  const raw = response.choices[0].message.content.trim();
+  const parsed = parseJudgeVerdict(raw);
+  console.log('[severity-judge]', parsed.verdict);
+
+  if (parsed.verdict === 'REVISE' && parsed.revisedText) {
+    return formatForSlack(parsed.revisedText);
+  }
+
+  return draftText;
+}
+
+function shouldSkipJudge(draftText) {
+  return !draftText || draftText.startsWith('Error:');
+}
+
+function truncateForJudge(text, maxLen) {
+  if (!text || text.length <= maxLen) return text || '';
+  return `${text.slice(0, maxLen)}\n…[truncated]`;
+}
+
+/**
+ * Call OpenAI API to assess severity and recommend next steps.
+ * @param {string|null} threadContent
+ * @param {Array|null} jiraTickets
+ * @param {object|null} slaGuidelines
+ * @param {string} userQuery
+ * @param {Array} conversationHistory Prior assistant/user messages only (do not include the current userQuery).
  */
 async function assessSeverity(threadContent, jiraTickets, slaGuidelines, userQuery, conversationHistory = []) {
   try {
-    // Format the jira tickets for readability, but only if they exist
-    let formattedTickets = "";
+    let formattedTickets = '';
     if (jiraTickets) {
-      formattedTickets = jiraTickets.map(ticket => {
-        if (ticket.error) {
-          return `Ticket ID: ${ticket.id} - ERROR: ${ticket.error}`;
-        }
-        
-        return `
+      formattedTickets = jiraTickets
+        .map(ticket => {
+          if (ticket.error) {
+            return `Ticket ID: ${ticket.id} - ERROR: ${ticket.error}`;
+          }
+
+          return `
 TICKET: ${ticket.id}
 Summary: ${ticket.summary}
 Type: ${ticket.issuetype}
@@ -186,38 +349,31 @@ Environment: ${ticket.environment || 'Not specified'}
 Description:
 ${ticket.description || 'No description provided'}
 `;
-      }).join('\n\n----------\n\n');
+        })
+        .join('\n\n----------\n\n');
     }
 
-    // OpenAI API call
     const { OpenAI } = require('openai');
     const openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY
     });
 
-    // Create messages array with conversation history
-    const messages = [
-      {
-        role: "system",
-        content: "You are a bug severity assessment expert for Lexus.com. You analyze issues and determine their Business Priority Level according to established SLA criteria. Format your responses for Slack: use *asterisks for bold* (not markdown headers with #), use simple bullet points with • symbols, and keep formatting simple. You can engage in a conversation about your assessment, explaining your reasoning or reconsidering your assessment if the user provides additional context or suggests a different severity level. Your assessments should be clear, structured, and focused on facts from the provided information."
-      }
-    ];
-    
-    // If this is a new assessment, add the full context
+    const messages = [{ role: 'system', content: GENERATOR_SYSTEM_PROMPT }];
+
     if (conversationHistory.length === 0) {
       messages.push({
-        role: "user",
+        role: 'user',
         content: `
 You are a bug severity assessment expert for the Lexus website team. You're analyzing a Slack conversation and Jira tickets to determine the appropriate severity level according to our Business Priority SLA.
 
 SLACK THREAD CONTENT:
-${threadContent || "No thread content provided"}
+${threadContent || 'No thread content provided'}
 
 JIRA TICKET DETAILS:
-${formattedTickets || "No ticket details available for this follow-up question"}
+${formattedTickets || 'No ticket details available for this follow-up question'}
 
 SLA GUIDELINES:
-${slaGuidelines ? JSON.stringify(slaGuidelines, null, 2) : "Using SLA guidelines from previous context"}
+${slaGuidelines ? JSON.stringify(slaGuidelines, null, 2) : 'Using SLA guidelines from previous context'}
 
 Based on the information above:
 
@@ -232,29 +388,27 @@ Your assessment should be formatted specifically for Slack: use *asterisks for b
 `
       });
     } else {
-      // For a follow-up, add the existing conversation
       messages.push(...conversationHistory);
-      
-      // Add the user's new query
+      const followUpBody =
+        slaGuidelines
+          ? `SLA GUIDELINES (full reference for this conversation):\n${JSON.stringify(slaGuidelines, null, 2)}\n\nUser follow-up:\n${userQuery}`
+          : userQuery;
       messages.push({
-        role: "user",
-        content: userQuery
+        role: 'user',
+        content: followUpBody
       });
     }
 
-    // Make the API call
     const response = await openai.chat.completions.create({
-      model: "gpt-4-turbo",  // Use the most capable model
-      messages: messages,
-      temperature: 0.2,  // Low temperature for more consistent, precise responses
+      model: getSeverityModel(),
+      messages,
+      temperature: 0.2,
       max_tokens: 1500
     });
 
     let formattedResponse = response.choices[0].message.content.trim();
-    
-    // Ensure Slack formatting even if the model doesn't follow instructions perfectly
     formattedResponse = formatForSlack(formattedResponse);
-    
+
     return {
       text: formattedResponse,
       message: response.choices[0].message
@@ -262,9 +416,56 @@ Your assessment should be formatted specifically for Slack: use *asterisks for b
   } catch (error) {
     console.error('Error calling OpenAI API:', error);
     return {
-      text: `Error: Unable to assess severity at this time. ${error.message || "Please try again later."}`,
-      message: { role: "assistant", content: `Error: ${error.message}` }
+      text: `Error: Unable to assess severity at this time. ${error.message || 'Please try again later.'}`,
+      message: { role: 'assistant', content: `Error: ${error.message}` }
     };
+  }
+}
+
+/**
+ * Generator + judge pipeline for Slack-facing severity text.
+ */
+async function assessSeverityWithJudge(ctx) {
+  const {
+    threadContent,
+    jiraTickets,
+    slaGuidelines,
+    userQuery,
+    conversationHistory = [],
+    threadSummary,
+    ticketDigest
+  } = ctx;
+
+  const { text, message } = await assessSeverity(
+    threadContent,
+    jiraTickets,
+    slaGuidelines,
+    userQuery,
+    conversationHistory
+  );
+
+  if (shouldSkipJudge(text)) {
+    return { text, message };
+  }
+
+  try {
+    const { OpenAI } = require('openai');
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const judged = await judgeSeverityDraft(openai, {
+      draftText: text,
+      threadSummary: truncateForJudge(threadSummary, 6000),
+      ticketDigest: truncateForJudge(ticketDigest, 8000),
+      slaGuidelines
+    });
+    const mergedMessage =
+      typeof message.content === 'string'
+        ? { ...message, content: judged }
+        : { ...message, content: judged };
+
+    return { text: judged, message: mergedMessage };
+  } catch (err) {
+    console.error('[severity-judge] failed, using draft:', err.message);
+    return { text, message };
   }
 }
 /**
@@ -323,24 +524,24 @@ slackApp.event('app_mention', async ({ event, client, logger }) => {
     
     // If this is a follow-up, use the existing conversation history
     if (isFollowUp && conversationMemory.messages) {
-      // Add the new user query
-      const messages = [...conversationMemory.messages, { 
-        role: "user", 
-        content: userQuery 
-      }];
-      
-      // Get the response from OpenAI
-      const { text, message } = await assessSeverity(
-        null, // No need to send thread content again
-        null, // No need to send Jira tickets again
-        null, // No need to send SLA guidelines again
+      const priorMessages = conversationMemory.messages;
+      const slaGuidelines = await getMergedSlaGuidelines();
+
+      const { text, message } = await assessSeverityWithJudge({
+        threadContent: null,
+        jiraTickets: null,
+        slaGuidelines,
         userQuery,
-        messages
-      );
-      
-      // Update conversation memory with new message
+        conversationHistory: priorMessages,
+        threadSummary: `Follow-up in Slack thread. User message: ${userQuery}`,
+        ticketDigest:
+          conversationMemory.jiraTickets?.length > 0
+            ? `Tickets in scope: ${conversationMemory.jiraTickets.join(', ')}`
+            : 'Tickets not recorded in memory'
+      });
+
       updateConversationMemory(event.channel, threadTs, {
-        messages: [...messages, message]
+        messages: [...priorMessages, { role: 'user', content: userQuery }, message]
       });
       
       // Post the response
@@ -417,13 +618,22 @@ slackApp.event('app_mention', async ({ event, client, logger }) => {
       return;
     }
     
-    // Send to LLM for assessment
-    const { text, message } = await assessSeverity(
-      threadMessages, 
-      jiraTickets, 
-      SLA_GUIDELINES, 
-      userQuery
-    );
+    const ticketDigest = jiraTickets
+      .filter(t => !t.error)
+      .map(t => `${t.id}: ${t.summary}`)
+      .join('\n');
+
+    const slaGuidelines = await getMergedSlaGuidelines();
+
+    const { text, message } = await assessSeverityWithJudge({
+      threadContent: threadMessages,
+      jiraTickets,
+      slaGuidelines,
+      userQuery,
+      conversationHistory: [],
+      threadSummary: threadMessages,
+      ticketDigest
+    });
     
     // Save conversation context for follow-ups
     updateConversationMemory(event.channel, threadTs, {
@@ -486,30 +696,29 @@ slackApp.event('message', async ({ message, client, logger }) => {
     const isFollowUp = isFollowUpQuestion(message.text, conversationMemory);
     
     if (isFollowUp && conversationMemory.messages) {
-      // Process follow-up question
       const processingMessage = await client.chat.postMessage({
         channel: message.channel,
         text: "I'm reconsidering my assessment based on your feedback..."
       });
-      
-      // Add the new user query
-      const messages = [...conversationMemory.messages, { 
-        role: "user", 
-        content: message.text 
-      }];
-      
-      // Get the response from OpenAI
-      const { text, message: newMessage } = await assessSeverity(
-        null, // No need to send content again
-        null, // No need to send Jira tickets again
-        null, // No need to send SLA guidelines again
-        message.text,
-        messages
-      );
-      
-      // Update conversation memory with new message
+
+      const priorMessages = conversationMemory.messages;
+      const slaGuidelines = await getMergedSlaGuidelines();
+
+      const { text, message: newMessage } = await assessSeverityWithJudge({
+        threadContent: null,
+        jiraTickets: null,
+        slaGuidelines,
+        userQuery: message.text,
+        conversationHistory: priorMessages,
+        threadSummary: `Follow-up in DM. User message: ${message.text}`,
+        ticketDigest:
+          conversationMemory.jiraTickets?.length > 0
+            ? `Tickets in scope: ${conversationMemory.jiraTickets.join(', ')}`
+            : 'Tickets not recorded in memory'
+      });
+
       updateConversationMemory(message.channel, "dm", {
-        messages: [...messages, newMessage]
+        messages: [...priorMessages, { role: "user", content: message.text }, newMessage]
       });
       
       // Send the response
@@ -568,13 +777,19 @@ slackApp.event('message', async ({ message, client, logger }) => {
     // Limited context since this is a DM without thread history
     const limitedContext = `User is asking for severity assessment of ticket ${ticketId} in a direct message.`;
     
-    // Call LLM to assess
-    const { text, message: botMessage } = await assessSeverity(
-      limitedContext, 
-      [ticketDetails], 
-      SLA_GUIDELINES,
-      message.text
-    );
+    const ticketDigest = `${ticketDetails.id}: ${ticketDetails.summary}`;
+
+    const slaGuidelines = await getMergedSlaGuidelines();
+
+    const { text, message: botMessage } = await assessSeverityWithJudge({
+      threadContent: limitedContext,
+      jiraTickets: [ticketDetails],
+      slaGuidelines,
+      userQuery: message.text,
+      conversationHistory: [],
+      threadSummary: limitedContext,
+      ticketDigest
+    });
     
     // Save conversation context for follow-ups
     updateConversationMemory(message.channel, "dm", {

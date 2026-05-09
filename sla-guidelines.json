@@ -8,8 +8,8 @@
       "Complete site or page non-responsiveness on Lexus.com",
       "500 server errors (entire site or specific node)",
       "404 errors on production pages",
-      "L/Certified search inventory returning no results",
-      "SIT returning no results or incorrect results",
+      "L/Certified inventory search returning no results or incorrect results",
+      "Search Inventory Tool (SIT): inventory search returning no results or incorrect results",
       "Sales Events, Global Navigation, Find a dealer, or Vehicle landing pages not functioning",
       "Incorrect MSRP information (excluding 'as shown' pricing)",
       "Incorrect MPG information displayed",
@@ -116,6 +116,10 @@
   "metadata": {
     "assessment_process": "Initial severity assessment done by Team One, then assigned by Lexus Digital Marketing Business and ITX",
     "adjustment_policy": "Level can be upgraded or downgraded at any time by Lexus Business",
-    "scope": "This SLA covers Team One responsibilities (Content/code)"
+    "scope": "This SLA covers Team One responsibilities (Content/code)",
+    "domain_glossary": {
+      "search_inventory_sit_lcertified": "Search Inventory Tool (SIT), L/Certified inventory search, and dealer/inventory discovery flows are NOT the same as global Lexus.com site search (header/content search). Sev 1 bullets that mention SIT or L/Certified inventory search apply only when the issue is clearly about inventory or certified inventory search—not generic site-wide search UX.",
+      "site_search": "Site search means header/global/content search on Lexus.com. Do not classify site search issues as Business Priority Level 1 solely by applying the Search Inventory Tool or L/Certified inventory search criteria; another independent Sev 1 criterion must apply."
+    }
   }
 }

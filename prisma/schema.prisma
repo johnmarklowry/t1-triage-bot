@@ -127,6 +127,16 @@ model Discipline {
   @@map("discipline")
 }
 
+/// Singleton overlay (id=1): partial SLA JSON merged onto repo sla-guidelines.json for LLM assessments
+model SeverityContextOverlay {
+  id        Int      @id @default(1)
+  patchJson Json     @map("patch_json")
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+  updatedBy String?  @map("updated_by") @db.VarChar(50)
+
+  @@map("severity_context_overlay")
+}
+
 /// Custom migration tracking table (legacy - Prisma uses _prisma_migrations table)
 model Migration {
   id         Int       @id @default(autoincrement())

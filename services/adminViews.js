@@ -13,6 +13,7 @@ const {
 
 const { warnIfNonSlackMarkdown } = require('./slackMrkdwn');
 const config = require('../config');
+const { getSeverityPatchRecord } = require('../repositories/severityContext');
 
 const DISCIPLINE_OPTIONS = [
   { label: 'Account', value: 'account' },
@@ -504,6 +505,68 @@ async function buildAdminOnCallModalView() {
   };
 }
 
+async function buildAdminSeverityContextModalView() {
+  const record = await getSeverityPatchRecord();
+  const patchObj = record?.patchJson && typeof record.patchJson === 'object' && !Array.isArray(record.patchJson)
+    ? record.patchJson
+    : {};
+  let initial = JSON.stringify(patchObj, null, 2);
+
+  const introMrkdwn =
+    'Enter *partial JSON* merged onto the repository `sla-guidelines.json` for severity assessments. Nested objects merge; *arrays replace* the base array at the same key. Use `{}` to rely on the file only.';
+  warnIfNonSlackMarkdown(introMrkdwn, 'adminViews.buildAdminSeverityContextModalView(intro)');
+
+  const blocks = [
+    { type: 'header', text: { type: 'plain_text', text: 'Severity SLA overlay' } },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: introMrkdwn
+      }
+    }
+  ];
+
+  if (initial.length > 3000) {
+    blocks.push({
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: `_Patch is longer than 3000 characters; showing the first 3000 only—shorten the saved patch in the database or trim before editing here._`
+        }
+      ]
+    });
+    initial = initial.slice(0, 3000);
+  }
+
+  blocks.push({
+    type: 'input',
+    block_id: 'severity_patch_json',
+    label: { type: 'plain_text', text: 'Patch JSON' },
+    hint: {
+      type: 'plain_text',
+      text: 'JSON object only (not an array). Max 3000 characters.'
+    },
+    element: {
+      type: 'plain_text_input',
+      action_id: 'severity_patch_json_input',
+      multiline: true,
+      max_length: 3000,
+      initial_value: initial
+    }
+  });
+
+  return {
+    type: 'modal',
+    callback_id: 'admin_severity_context_modal',
+    title: { type: 'plain_text', text: 'Severity SLA' },
+    submit: { type: 'plain_text', text: 'Save' },
+    close: { type: 'plain_text', text: 'Cancel' },
+    blocks
+  };
+}
+
 module.exports = {
   DISCIPLINE_OPTIONS,
   getDisciplinesSourceFile,
@@ -511,6 +574,7 @@ module.exports = {
   buildAdminDisciplinesModalView,
   buildAdminSprintsModalView,
   buildAdminUsersModalView,
-  buildAdminOnCallModalView
+  buildAdminOnCallModalView,
+  buildAdminSeverityContextModalView
 };
 

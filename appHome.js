@@ -33,7 +33,8 @@ const {
   buildAdminUsersModalView,
   buildAdminDisciplinesModalView,
   buildAdminSprintsModalView,
-  buildAdminOnCallModalView
+  buildAdminOnCallModalView,
+  buildAdminSeverityContextModalView
 } = require('./services/adminViews');
 
 // Import environment-specific command utilities
@@ -2208,6 +2209,16 @@ function buildAdminHubModalView() {
           { type: 'button', text: { type: 'plain_text', text: 'Overrides' }, action_id: 'admin_hub_open_overrides' },
           { type: 'button', text: { type: 'plain_text', text: 'On-call' }, action_id: 'admin_hub_open_oncall' }
         ]
+      },
+      {
+        type: 'actions',
+        elements: [
+          {
+            type: 'button',
+            text: { type: 'plain_text', text: 'Severity SLA' },
+            action_id: 'admin_hub_open_severity_context'
+          }
+        ]
       }
     ]
   };
@@ -2373,6 +2384,26 @@ slackApp.action('admin_hub_open_oncall', async ({ ack, body, client, logger }) =
     await client.views.push({ trigger_id: triggerId, view });
   } catch (error) {
     logger?.warn?.('[admin_hub_open_oncall] views.push failed, falling back to views.open', {
+      error: error?.data?.error || error?.message
+    });
+    await client.views.open({ trigger_id: triggerId, view });
+  }
+});
+
+slackApp.action('admin_hub_open_severity_context', async ({ ack, body, client, logger }) => {
+  await ack();
+  const triggerId = body?.trigger_id;
+  const userId = body?.user?.id;
+
+  if (!triggerId) return;
+  if (!(await ensureAdminAccess({ client, userId, logger }))) return;
+
+  const view = await buildAdminSeverityContextModalView();
+
+  try {
+    await client.views.push({ trigger_id: triggerId, view });
+  } catch (error) {
+    logger?.warn?.('[admin_hub_open_severity_context] views.push failed, falling back to views.open', {
       error: error?.data?.error || error?.message
     });
     await client.views.open({ trigger_id: triggerId, view });

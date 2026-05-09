@@ -12,6 +12,9 @@ const isolatedSuites = new Set([
   'tests/unit/a02-triageLogic.overrides.test.js',
   'tests/unit/a03-dataUtils.readOverrides.test.js',
   'tests/unit/a04-triageLogic.scheduler.test.js',
+  'tests/unit/a05-triageLogic.reconcile.test.js',
+  'tests/unit/snapshotService.recordAlign.test.js',
+  'tests/unit/slackNotifier.updateChannelTopic.test.js',
 ]);
 
 function walk(dir) {

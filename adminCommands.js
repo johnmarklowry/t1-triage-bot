@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const { slackApp, publishAppHomeForUser } = require('./appHome');
 const { getEnvironmentCommand } = require('./commandUtils');
-const { setCurrentSprintRolesFromAdmin } = require('./triageLogic');
+const { setCurrentSprintRolesFromAdmin, reconcileCurrentStateAfterUserDeactivated } = require('./triageLogic');
 const cache = require('./cache/redisClient');
 const { UsersRepository } = require('./db/repository');
 const { 
@@ -31,6 +31,33 @@ const {
   buildAdminUsersModalView
 } = require('./services/adminViews');
 
+/**
+ * Prefer explicit display name; otherwise resolve from Slack users.info (same precedence as disciplines add-member).
+ * @param {*} client Slack WebClient
+ * @param {string} slackId
+ * @param {string|null|undefined} explicitName
+ * @param {{ warn?: (msg: string, meta?: object) => void }} [logger]
+ */
+async function resolveSlackUserDisplayName(client, slackId, explicitName, logger) {
+  const trimmed = explicitName != null && String(explicitName).trim() !== '' ? String(explicitName).trim() : '';
+  if (trimmed) return trimmed;
+  try {
+    const info = await client.users.info({ user: slackId });
+    const u = info?.user;
+    return (
+      u?.real_name ||
+      u?.profile?.real_name ||
+      u?.profile?.display_name ||
+      u?.name ||
+      slackId
+    );
+  } catch (e) {
+    logger?.warn?.('[resolveSlackUserDisplayName] users.info failed; falling back to slackId', {
+      error: e?.data?.error || e?.message
+    });
+    return slackId;
+  }
+}
 
 /**
  * /admin-sprints
@@ -526,6 +553,8 @@ slackApp.action('admin_disciplines_deactivate', async ({ ack, body, client, logg
       saveJSON(sourceFile, disciplinesObj);
     }
 
+    await reconcileCurrentStateAfterUserDeactivated(slackId);
+
     const meta = JSON.parse(body.view.private_metadata || '{}');
     const view = await buildAdminDisciplinesModalView({ discipline, showInactive: !!meta.showInactive });
     await client.views.update({ view_id: body.view.id, hash: body.view.hash, view });
@@ -638,22 +667,7 @@ slackApp.view('admin_disciplines_add_member_modal', async ({ ack, body, view, cl
     const slackId = view.state.values.member_slack_id.member_slack_id_input.selected_user;
     if (!slackId) throw new Error('Slack user is required.');
 
-    // Derive name from Slack profile (avoids manual, potentially wrong input)
-    let name = slackId;
-    try {
-      const info = await client.users.info({ user: slackId });
-      const u = info?.user;
-      name =
-        u?.real_name ||
-        u?.profile?.real_name ||
-        u?.profile?.display_name ||
-        u?.name ||
-        slackId;
-    } catch (e) {
-      logger?.warn?.('[admin_disciplines_add_member_modal] users.info failed; falling back to slackId', {
-        error: e?.data?.error || e?.message
-      });
-    }
+    const name = await resolveSlackUserDisplayName(client, slackId, null, logger);
 
     const useDatabase =
       process.env.USE_DATABASE !== 'false' &&
@@ -766,7 +780,7 @@ slackApp.action('admin_users_add', async ({ ack, body, client, logger }) => {
         element: {
           type: "plain_text_input",
           action_id: "display_name_input",
-          placeholder: { type: "plain_text", text: "If omitted, we’ll use the name you enter here." }
+          placeholder: { type: "plain_text", text: "Leave blank to use Slack profile name." }
         }
       }
     ];
@@ -852,7 +866,7 @@ slackApp.view('admin_users_add_modal', async ({ ack, body, view, client, logger 
       throw new Error('Discipline and Slack user are required.');
     }
 
-    const name = displayName && String(displayName).trim() ? String(displayName).trim() : slackId;
+    const name = await resolveSlackUserDisplayName(client, slackId, displayName, logger);
 
     const useDatabase =
       process.env.USE_DATABASE !== 'false' &&
@@ -982,6 +996,8 @@ slackApp.action('admin_users_deactivate', async ({ ack, body, client, logger }) 
       }
       saveJSON(sourceFile, disciplinesObj);
     }
+
+    await reconcileCurrentStateAfterUserDeactivated(slackId);
 
     await rebuildAdminUsersModal({ client, viewId: body.view.id, viewHash: body.view.hash, logger });
   } catch (error) {

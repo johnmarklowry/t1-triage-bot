@@ -14,6 +14,14 @@ const {
 const { warnIfNonSlackMarkdown } = require('./slackMrkdwn');
 const config = require('../config');
 const { getSeverityPatchRecord } = require('../repositories/severityContext');
+const baseSlaGuidelines = require('../sla-guidelines.json');
+const {
+  getGlossaryInitialStrings,
+  getAdvancedInitialText
+} = require('./severitySlaOverlayForm');
+
+const ADVANCED_PATCH_MAX_CHARS = 1500;
+const GLOSSARY_INPUT_MAX_CHARS = 3000;
 
 const DISCIPLINE_OPTIONS = [
   { label: 'Account', value: 'account' },
@@ -505,15 +513,26 @@ async function buildAdminOnCallModalView() {
   };
 }
 
+function truncateForSlackInput(text, maxLen) {
+  const s = String(text ?? '');
+  if (s.length <= maxLen) return s;
+  return `${s.slice(0, maxLen)}\n…[truncated]`;
+}
+
 async function buildAdminSeverityContextModalView() {
   const record = await getSeverityPatchRecord();
-  const patchObj = record?.patchJson && typeof record.patchJson === 'object' && !Array.isArray(record.patchJson)
-    ? record.patchJson
-    : {};
-  let initial = JSON.stringify(patchObj, null, 2);
+  const patchObj =
+    record?.patchJson && typeof record.patchJson === 'object' && !Array.isArray(record.patchJson)
+      ? record.patchJson
+      : {};
+
+  const { inventory, siteSearch } = getGlossaryInitialStrings(patchObj, baseSlaGuidelines);
+  let advancedInitial = getAdvancedInitialText(patchObj, ADVANCED_PATCH_MAX_CHARS);
 
   const introMrkdwn =
-    'Enter *partial JSON* merged onto the repository `sla-guidelines.json` for severity assessments. Nested objects merge; *arrays replace* the base array at the same key. Use `{}` to rely on the file only.';
+    'These notes are merged onto the repository `sla-guidelines.json` for severity assessments. ' +
+    '*Inventory / SIT / L-Certified* vs *site search* rules apply to how the bot interprets SLA bullets. ' +
+    'Leave a field empty to use the repo default for that line only. Optional *Advanced JSON* is for other overlay keys (arrays replace at the same key).';
   warnIfNonSlackMarkdown(introMrkdwn, 'adminViews.buildAdminSeverityContextModalView(intro)');
 
   const blocks = [
@@ -524,38 +543,59 @@ async function buildAdminSeverityContextModalView() {
         type: 'mrkdwn',
         text: introMrkdwn
       }
+    },
+    {
+      type: 'input',
+      block_id: 'severity_glossary_inventory',
+      optional: true,
+      label: { type: 'plain_text', text: 'Search Inventory / SIT / L-Certified (vs site search)' },
+      hint: {
+        type: 'plain_text',
+        text: 'When Sev 1 inventory-search bullets apply. Empty = use repo default.'
+      },
+      element: {
+        type: 'plain_text_input',
+        action_id: 'severity_glossary_inventory_input',
+        multiline: true,
+        max_length: GLOSSARY_INPUT_MAX_CHARS,
+        initial_value: truncateForSlackInput(inventory, GLOSSARY_INPUT_MAX_CHARS)
+      }
+    },
+    {
+      type: 'input',
+      block_id: 'severity_glossary_site_search',
+      optional: true,
+      label: { type: 'plain_text', text: 'Lexus.com site search' },
+      hint: {
+        type: 'plain_text',
+        text: 'Site/header/global search — not inventory search. Empty = use repo default.'
+      },
+      element: {
+        type: 'plain_text_input',
+        action_id: 'severity_glossary_site_search_input',
+        multiline: true,
+        max_length: GLOSSARY_INPUT_MAX_CHARS,
+        initial_value: truncateForSlackInput(siteSearch, GLOSSARY_INPUT_MAX_CHARS)
+      }
+    },
+    {
+      type: 'input',
+      block_id: 'severity_advanced_json',
+      optional: true,
+      label: { type: 'plain_text', text: 'Advanced patch JSON (optional)' },
+      hint: {
+        type: 'plain_text',
+        text: `Other overlay keys only; glossary fields above win on conflict. Max ${ADVANCED_PATCH_MAX_CHARS} characters.`
+      },
+      element: {
+        type: 'plain_text_input',
+        action_id: 'severity_advanced_json_input',
+        multiline: true,
+        max_length: ADVANCED_PATCH_MAX_CHARS,
+        initial_value: truncateForSlackInput(advancedInitial, ADVANCED_PATCH_MAX_CHARS)
+      }
     }
   ];
-
-  if (initial.length > 3000) {
-    blocks.push({
-      type: 'context',
-      elements: [
-        {
-          type: 'mrkdwn',
-          text: `_Patch is longer than 3000 characters; showing the first 3000 only—shorten the saved patch in the database or trim before editing here._`
-        }
-      ]
-    });
-    initial = initial.slice(0, 3000);
-  }
-
-  blocks.push({
-    type: 'input',
-    block_id: 'severity_patch_json',
-    label: { type: 'plain_text', text: 'Patch JSON' },
-    hint: {
-      type: 'plain_text',
-      text: 'JSON object only (not an array). Max 3000 characters.'
-    },
-    element: {
-      type: 'plain_text_input',
-      action_id: 'severity_patch_json_input',
-      multiline: true,
-      max_length: 3000,
-      initial_value: initial
-    }
-  });
 
   return {
     type: 'modal',

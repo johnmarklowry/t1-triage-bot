@@ -5,6 +5,7 @@
 const { slackApp } = require('./appHome');
 const axios = require('axios');
 const { getMergedSlaGuidelines } = require('./repositories/severityContext');
+const { assessDraftSlaGrounding } = require('./lib/slaDraftGrounding');
 
 // Configure JIRA API credentials
 const JIRA_CONFIG = {
@@ -36,6 +37,22 @@ const SEVERITY_DOMAIN_GUARDRAILS = `Severity classification rules you MUST follo
 • Before citing Business Priority Level 1 for "Search Inventory Tool (SIT)", "L/Certified inventory search", or similar inventory-search criteria, confirm the issue is about inventory or certified-inventory search—not Lexus.com site-wide/header/content search.
 • Lexus.com site search issues must NOT be classified as Level 1 solely because search returns no or incorrect results if the only matching SLA bullets are inventory-search (SIT/L-Certified) criteria. Another independent Level 1 criterion must apply for Level 1.
 • When uncertain whether an issue is site search vs inventory search, state that ambiguity and avoid overstating severity.`;
+
+const QA_FORMAT_NOTICE =
+  '\n\n• _Automated QA did not return a valid verdict format after retry; please verify this assessment against the SLA._';
+
+const GROUNDING_NOTICE =
+  '\n\n• _Some bullet-style SLA cites could not be matched to the merged guideline text automatically; please confirm against the official SLA._';
+
+const JUDGE_RETRY_HINT = `IMPORTANT: Your previous reply did not follow the required format. Reply with ONLY one of these blocks—no preamble, no markdown fences, no commentary before VERDICT:
+
+VERDICT: APPROVE
+
+OR
+
+VERDICT: REVISE
+MESSAGE:
+<full revised Slack-formatted assessment the user should see>`;
 
 const GENERATOR_SYSTEM_PROMPT = `You are a bug severity assessment expert for Lexus.com. You analyze issues and determine their Business Priority Level according to established SLA criteria.
 
@@ -225,12 +242,23 @@ function isFollowUpQuestion(text, conversationMemory) {
 }
 
 /**
+ * Strip markdown fences / stray whitespace so VERDICT lines parse reliably.
+ */
+function sanitizeJudgeRaw(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  let s = raw.trim();
+  s = s.replace(/^```(?:\w*)?\s*\r?\n?/i, '');
+  s = s.replace(/\r?\n?```\s*$/i, '');
+  return s.trim();
+}
+
+/**
  * Parse judge model output: VERDICT: APPROVE | VERDICT: REVISE + MESSAGE: ...
  */
 function parseJudgeVerdict(raw) {
   if (!raw || typeof raw !== 'string') return { verdict: 'UNKNOWN', revisedText: null };
 
-  const trimmed = raw.trim();
+  const trimmed = sanitizeJudgeRaw(raw);
   const approve = /^VERDICT:\s*APPROVE\b/im.exec(trimmed);
   if (approve) return { verdict: 'APPROVE', revisedText: null };
 
@@ -245,13 +273,11 @@ function parseJudgeVerdict(raw) {
   return { verdict: 'UNKNOWN', revisedText: null };
 }
 
-/**
- * Second-pass QA on draft severity assessment (optional different model via OPENAI_JUDGE_MODEL).
- */
-async function judgeSeverityDraft(openai, { draftText, threadSummary, ticketDigest, slaGuidelines }) {
+function buildJudgeUserContent({ draftText, threadSummary, ticketDigest, slaGuidelines }, retryPreamble) {
   const slaPayload = slaGuidelines ? JSON.stringify(slaGuidelines, null, 2) : '{}';
+  const preamble = retryPreamble ? `${retryPreamble}\n\n---\n\n` : '';
 
-  const userContent = `
+  return `${preamble}
 DRAFT_ASSESSMENT (may contain errors):
 ${draftText}
 
@@ -280,30 +306,50 @@ VERDICT: REVISE
 MESSAGE:
 <full revised Slack-formatted assessment the user should see>
 `;
+}
 
-  const response = await openai.chat.completions.create({
-    model: getJudgeModel(),
-    messages: [
-      {
-        role: 'system',
-        content:
-          'You are an independent QA reviewer for Lexus.com bug severity assessments. You enforce SLA grounding and domain rules (site search vs inventory search). Output only the VERDICT block in the requested format—no preamble.'
-      },
-      { role: 'user', content: userContent }
-    ],
-    temperature: 0.1,
-    max_tokens: 1800
-  });
+/**
+ * Second-pass QA on draft severity assessment (optional different model via OPENAI_JUDGE_MODEL).
+ * Retries once if output is not parseable; returns { text, verdict }.
+ */
+async function judgeSeverityDraft(openai, { draftText, threadSummary, ticketDigest, slaGuidelines }) {
+  let lastRaw = '';
 
-  const raw = response.choices[0].message.content.trim();
-  const parsed = parseJudgeVerdict(raw);
-  console.log('[severity-judge]', parsed.verdict);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const retryPreamble = attempt === 1 ? JUDGE_RETRY_HINT : '';
+    const userContent = buildJudgeUserContent(
+      { draftText, threadSummary, ticketDigest, slaGuidelines },
+      retryPreamble
+    );
 
-  if (parsed.verdict === 'REVISE' && parsed.revisedText) {
-    return formatForSlack(parsed.revisedText);
+    const response = await openai.chat.completions.create({
+      model: getJudgeModel(),
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are an independent QA reviewer for Lexus.com bug severity assessments. You enforce SLA grounding and domain rules (site search vs inventory search). Output only the VERDICT block in the requested format—no preamble, no markdown code fences.'
+        },
+        { role: 'user', content: userContent }
+      ],
+      temperature: 0.1,
+      max_tokens: 1800
+    });
+
+    lastRaw = response.choices[0].message.content?.trim?.() || '';
+    const parsed = parseJudgeVerdict(lastRaw);
+    console.log('[severity-judge]', parsed.verdict, attempt === 1 ? '(retry)' : '');
+
+    if (parsed.verdict === 'APPROVE') {
+      return { text: draftText, verdict: 'APPROVE' };
+    }
+    if (parsed.verdict === 'REVISE' && parsed.revisedText) {
+      return { text: formatForSlack(parsed.revisedText), verdict: 'REVISE' };
+    }
   }
 
-  return draftText;
+  console.warn('[severity-judge] UNKNOWN after retry; raw tail:', lastRaw.slice(-240));
+  return { text: draftText, verdict: 'UNKNOWN' };
 }
 
 function shouldSkipJudge(draftText) {
@@ -312,7 +358,14 @@ function shouldSkipJudge(draftText) {
 
 function truncateForJudge(text, maxLen) {
   if (!text || text.length <= maxLen) return text || '';
-  return `${text.slice(0, maxLen)}\n…[truncated]`;
+  const sep = '\n…[middle truncated]…\n';
+  const budget = maxLen - sep.length;
+  if (budget < 400) {
+    return `${text.slice(0, Math.max(0, maxLen - 24))}\n…[truncated]`;
+  }
+  const headLen = Math.floor(budget * 0.55);
+  const tailLen = budget - headLen;
+  return `${text.slice(0, headLen)}${sep}${text.slice(-tailLen)}`;
 }
 
 /**
@@ -451,12 +504,24 @@ async function assessSeverityWithJudge(ctx) {
   try {
     const { OpenAI } = require('openai');
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const judged = await judgeSeverityDraft(openai, {
+    const judgeResult = await judgeSeverityDraft(openai, {
       draftText: text,
       threadSummary: truncateForJudge(threadSummary, 6000),
       ticketDigest: truncateForJudge(ticketDigest, 8000),
       slaGuidelines
     });
+
+    let judged = judgeResult.text;
+    if (judgeResult.verdict === 'UNKNOWN') {
+      judged += QA_FORMAT_NOTICE;
+    }
+
+    const grounding = assessDraftSlaGrounding(judged, slaGuidelines);
+    if (!grounding.grounded) {
+      console.warn('[severity-grounding] samples:', grounding.ungroundedSamples);
+      judged += GROUNDING_NOTICE;
+    }
+
     const mergedMessage =
       typeof message.content === 'string'
         ? { ...message, content: judged }
@@ -465,7 +530,21 @@ async function assessSeverityWithJudge(ctx) {
     return { text: judged, message: mergedMessage };
   } catch (err) {
     console.error('[severity-judge] failed, using draft:', err.message);
-    return { text, message };
+    let fallback = text;
+    try {
+      const grounding = assessDraftSlaGrounding(fallback, slaGuidelines);
+      if (!grounding.grounded) {
+        console.warn('[severity-grounding] samples:', grounding.ungroundedSamples);
+        fallback += GROUNDING_NOTICE;
+      }
+    } catch (_) {
+      /* ignore grounding errors when judge threw */
+    }
+    const mergedMessage =
+      typeof message.content === 'string'
+        ? { ...message, content: fallback }
+        : { ...message, content: fallback };
+    return { text: fallback, message: mergedMessage };
   }
 }
 /**

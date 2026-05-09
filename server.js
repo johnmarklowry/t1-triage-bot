@@ -120,7 +120,6 @@ async function initializeServer() {
     console.log('[SERVER] Initializing database...');
     
     // Only run custom migrations if not using Prisma Migrate
-    // Prisma Migrate is handled by Railway's startCommand: "npx prisma migrate deploy && npm start"
     const usePrismaMigrations = process.env.USE_PRISMA_MIGRATIONS !== 'false';
     
     if (!usePrismaMigrations) {
@@ -129,11 +128,33 @@ async function initializeServer() {
       await setupDatabase();
       console.log('[SERVER] Database setup completed');
     } else {
-      console.log('[SERVER] Using Prisma Migrate (handled by Railway startCommand or manual migration)');
-      // Still run data migration if needed (migrating JSON files to database)
-      const { runMigration: migrateJsonData } = require('./db/migrate-json-data');
+      console.log('[SERVER] Using Prisma Migrate');
       const fs = require('fs');
       const path = require('path');
+      const { spawnSync } = require('child_process');
+
+      const skipMigrateDeploy =
+        process.env.SKIP_PRISMA_MIGRATE_ON_START === 'true' ||
+        process.env.SKIP_PRISMA_MIGRATE_ON_START === '1';
+
+      if (process.env.DATABASE_URL && !skipMigrateDeploy) {
+        console.log('[SERVER] Running prisma migrate deploy (applies pending migrations before JSON seed)...');
+        const r = spawnSync('npx', ['prisma', 'migrate', 'deploy'], {
+          cwd: __dirname,
+          env: process.env,
+          stdio: 'inherit',
+          shell: true
+        });
+        if (r.status !== 0) {
+          throw new Error(`prisma migrate deploy failed with exit code ${r.status}`);
+        }
+      } else if (!process.env.DATABASE_URL) {
+        console.warn('[SERVER] DATABASE_URL unset; skipping prisma migrate deploy');
+      } else {
+        console.log('[SERVER] SKIP_PRISMA_MIGRATE_ON_START set; skipping prisma migrate deploy');
+      }
+
+      const { runMigration: migrateJsonData } = require('./db/migrate-json-data');
       const jsonFiles = ['sprints.json', 'disciplines.json', 'currentState.json', 'overrides.json'];
       const hasJsonFiles = jsonFiles.some(file => fs.existsSync(path.join(__dirname, file)));
       if (hasJsonFiles) {

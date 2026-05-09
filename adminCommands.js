@@ -30,7 +30,8 @@ const {
   buildAdminSprintsModalView,
   buildAdminUsersModalView
 } = require('./services/adminViews');
-const { saveSeverityPatch } = require('./repositories/severityContext');
+const { saveSeverityPatch, getSeverityPatchRecord } = require('./repositories/severityContext');
+const { assembleOverlayPatchFromForm } = require('./services/severitySlaOverlayForm');
 
 
 /**
@@ -906,25 +907,38 @@ const ONCALL_ROLES = ['account', 'producer', 'po', 'uiEng', 'beEng'];
 
 slackApp.view('admin_severity_context_modal', async ({ ack, body, view, client, logger }) => {
   try {
-    const raw = view.state?.values?.severity_patch_json?.severity_patch_json_input?.value ?? '';
-    const trimmed = String(raw).trim();
+    const vals = view.state?.values || {};
+    const glossaryInventory =
+      vals.severity_glossary_inventory?.severity_glossary_inventory_input?.value ?? '';
+    const glossarySiteSearch =
+      vals.severity_glossary_site_search?.severity_glossary_site_search_input?.value ?? '';
+    const advancedRaw =
+      vals.severity_advanced_json?.severity_advanced_json_input?.value ?? '';
+
+    let existingPatch = {};
+    try {
+      const record = await getSeverityPatchRecord();
+      existingPatch =
+        record?.patchJson && typeof record.patchJson === 'object' && !Array.isArray(record.patchJson)
+          ? record.patchJson
+          : {};
+    } catch (e) {
+      logger?.warn?.('[admin_severity_context_modal] failed to load existing patch', e);
+    }
 
     let parsed;
     try {
-      parsed = JSON.parse(trimmed || '{}');
+      parsed = assembleOverlayPatchFromForm({
+        existingPatch,
+        glossaryInventory,
+        glossarySiteSearch,
+        advancedRaw
+      });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       await ack({
         response_action: 'errors',
-        errors: { severity_patch_json: `Invalid JSON: ${msg}` }
-      });
-      return;
-    }
-
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      await ack({
-        response_action: 'errors',
-        errors: { severity_patch_json: 'Must be a JSON object (not an array or primitive).' }
+        errors: { severity_advanced_json: msg.slice(0, 250) }
       });
       return;
     }
@@ -939,7 +953,7 @@ slackApp.view('admin_severity_context_modal', async ({ ack, body, view, client, 
           : 'Save failed. Check DATABASE_URL, USE_DATABASE, and migrations.';
       await ack({
         response_action: 'errors',
-        errors: { severity_patch_json: hint }
+        errors: { severity_advanced_json: hint }
       });
       return;
     }

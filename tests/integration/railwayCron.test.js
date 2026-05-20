@@ -42,6 +42,14 @@ mock.module('../../dataUtils', () => ({
   refreshCurrentState: refreshCurrentStateMock,
 }));
 
+const handleRailwayReleaseTeamUpdateMock = mock(() => Promise.resolve({
+  result: 'skipped',
+  reason: 'no_sprint_starting_tomorrow',
+}));
+mock.module('../../jobs/railwayUpdateReleaseTeam', () => ({
+  handleRailwayReleaseTeamUpdate: handleRailwayReleaseTeamUpdateMock,
+}));
+
 let shouldDeferNotificationReturn = false;
 mock.module('../../services/notifications/weekdayPolicy', () => ({
   shouldDeferNotification: () => shouldDeferNotificationReturn,
@@ -81,6 +89,10 @@ describe('POST /railway/notify-rotation', () => {
     saveSnapshot.mockResolvedValue({ id: 42 });
     computeSnapshotHash.mockReturnValue('hash-value');
     refreshCurrentStateMock.mockResolvedValue(false);
+    handleRailwayReleaseTeamUpdateMock.mockResolvedValue({
+      result: 'skipped',
+      reason: 'no_sprint_starting_tomorrow',
+    });
   });
 
   function expectAcceptedContract(response, expectedResult) {
@@ -345,5 +357,36 @@ describe('POST /railway/notify-rotation', () => {
     expect(updateChannelTopicMock).not.toHaveBeenCalled();
     expect(recordCronTriggerAudit).not.toHaveBeenCalled();
     expect(updateCronTriggerResult).not.toHaveBeenCalled();
+  });
+
+  it('release-team route rejects invalid signature', async () => {
+    const response = await request(baseUrl).post('/jobs/railway/update-release-team').expect(401);
+    expect(response.body).toEqual({
+      status: 'unauthorized',
+      message: 'Invalid Railway cron signature',
+    });
+    expect(handleRailwayReleaseTeamUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it('release-team route returns accepted job result', async () => {
+    handleRailwayReleaseTeamUpdateMock.mockResolvedValue({
+      result: 'skipped',
+      reason: 'empty_release_team_set_preserved_previous',
+      sprintIndex: 42,
+    });
+
+    const response = await request(baseUrl)
+      .post('/jobs/railway/update-release-team')
+      .set('X-Railway-Cron-Signature', 'test-secret')
+      .send({ trigger_id: 'release-trigger-1' })
+      .expect(202);
+
+    expect(response.body).toEqual({
+      status: 'accepted',
+      result: 'skipped',
+      reason: 'empty_release_team_set_preserved_previous',
+      sprintIndex: 42,
+    });
+    expect(handleRailwayReleaseTeamUpdateMock).toHaveBeenCalledTimes(1);
   });
 });

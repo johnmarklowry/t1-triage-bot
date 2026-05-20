@@ -22,6 +22,9 @@ const DISCIPLINE_OPTIONS = [
   { label: 'BE Engineer', value: 'beEng' },
 ];
 
+const SLACK_MODAL_BLOCK_LIMIT = 100;
+const BLOCKS_PER_MEMBER = 2; // section block + actions block per member row
+
 function getDisciplinesSourceFile() {
   const isStaging = config.isStaging;
   const stagingPath = path.join(__dirname, '..', 'disciplines.staging.json');
@@ -61,7 +64,8 @@ async function getDisciplineMembersIncludingInactive(discipline) {
     .map(m => ({
       slackId: m.slackId,
       name: m.name || m.slackId,
-      active: m.active !== false
+      active: m.active !== false,
+      onReleaseTeam: m.onReleaseTeam === true
     }));
 
   return {
@@ -119,23 +123,38 @@ async function buildAdminDisciplinesModalView({ discipline, showInactive }) {
     confirmText: 'Remove'
   });
 
-  active.slice(0, 40).forEach(u => {
+  // Reserve 3 blocks for: divider + inactive-header section + footer context note.
+  let activeShown = 0;
+  for (const u of active) {
+    if (blocks.length + BLOCKS_PER_MEMBER > SLACK_MODAL_BLOCK_LIMIT - 3) break;
     blocks.push({
       type: 'section',
-      text: { type: 'mrkdwn', text: `*${u.name}* (<@${u.slackId}>)` },
-      accessory: {
-        type: 'button',
-        text: { type: 'plain_text', text: 'Remove from rotations' },
-        style: 'danger',
-        action_id: 'admin_disciplines_deactivate',
-        value: JSON.stringify({ slackId: u.slackId, discipline: selected }),
-        confirm: deactivateConfirm
-      }
+      text: { type: 'mrkdwn', text: `*${u.name}* (<@${u.slackId}>)\nRelease team: *${u.onReleaseTeam ? 'Yes' : 'No'}*` }
     });
-  });
+    blocks.push({
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Remove from rotations' },
+          style: 'danger',
+          action_id: 'admin_disciplines_deactivate',
+          value: JSON.stringify({ slackId: u.slackId, discipline: selected }),
+          confirm: deactivateConfirm
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: u.onReleaseTeam ? 'Unset release team' : 'Set release team' },
+          action_id: 'admin_disciplines_toggle_release_team',
+          value: JSON.stringify({ slackId: u.slackId, discipline: selected, onReleaseTeam: !u.onReleaseTeam })
+        }
+      ]
+    });
+    activeShown++;
+  }
 
-  if (active.length > 40) {
-    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `_Showing first 40 of ${active.length} active members_` }] });
+  if (activeShown < active.length) {
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `_Showing ${activeShown} of ${active.length} active members_` }] });
   }
 
   blocks.push({ type: 'divider' });
@@ -157,23 +176,38 @@ async function buildAdminDisciplinesModalView({ discipline, showInactive }) {
   });
 
   if (showInactive) {
-    inactive.slice(0, 40).forEach(u => {
+    // Reserve 1 block for a potential truncation context note at the end.
+    let inactiveShown = 0;
+    for (const u of inactive) {
+      if (blocks.length + BLOCKS_PER_MEMBER > SLACK_MODAL_BLOCK_LIMIT - 1) break;
       blocks.push({
         type: 'section',
-        text: { type: 'mrkdwn', text: `*${u.name}* (<@${u.slackId}>)` },
-        accessory: {
-          type: 'button',
-          text: { type: 'plain_text', text: 'Reactivate' },
-          style: 'primary',
-          action_id: 'admin_disciplines_reactivate',
-          value: JSON.stringify({ slackId: u.slackId, discipline: selected }),
-          confirm: reactivateConfirm
-        }
+        text: { type: 'mrkdwn', text: `*${u.name}* (<@${u.slackId}>)\nRelease team: *${u.onReleaseTeam ? 'Yes' : 'No'}*` }
       });
-    });
+      blocks.push({
+        type: 'actions',
+        elements: [
+          {
+            type: 'button',
+            text: { type: 'plain_text', text: 'Reactivate' },
+            style: 'primary',
+            action_id: 'admin_disciplines_reactivate',
+            value: JSON.stringify({ slackId: u.slackId, discipline: selected }),
+            confirm: reactivateConfirm
+          },
+          {
+            type: 'button',
+            text: { type: 'plain_text', text: u.onReleaseTeam ? 'Unset release team' : 'Set release team' },
+            action_id: 'admin_disciplines_toggle_release_team',
+            value: JSON.stringify({ slackId: u.slackId, discipline: selected, onReleaseTeam: !u.onReleaseTeam })
+          }
+        ]
+      });
+      inactiveShown++;
+    }
 
-    if (inactive.length > 40) {
-      blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `_Showing first 40 of ${inactive.length} inactive members_` }] });
+    if (inactiveShown < inactive.length) {
+      blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `_Showing ${inactiveShown} of ${inactive.length} inactive members_` }] });
     }
   } else {
     blocks.push({
@@ -183,7 +217,7 @@ async function buildAdminDisciplinesModalView({ discipline, showInactive }) {
   }
 
   // Slack modal limit: 100 blocks
-  if (blocks.length > 100) blocks.splice(100);
+  if (blocks.length > SLACK_MODAL_BLOCK_LIMIT) blocks.splice(SLACK_MODAL_BLOCK_LIMIT);
 
   return {
     type: 'modal',
@@ -310,7 +344,7 @@ async function buildAdminSprintsModalView({ page = 0, pageSize = 12 } = {}) {
   }
 
   // Slack modal limit: 100 blocks
-  if (blocks.length > 100) blocks.splice(100);
+  if (blocks.length > SLACK_MODAL_BLOCK_LIMIT) blocks.splice(SLACK_MODAL_BLOCK_LIMIT);
 
   return {
     type: 'modal',
@@ -415,7 +449,7 @@ async function buildAdminUsersModalView() {
   blocks.push({ type: "section", text: { type: "mrkdwn", text: `*Inactive* (${inactiveUsers.length})` } });
   inactiveUsers.slice(0, 35).forEach(u => blocks.push(renderUserRow(u)));
 
-  if (blocks.length > 100) blocks.splice(100);
+  if (blocks.length > SLACK_MODAL_BLOCK_LIMIT) blocks.splice(SLACK_MODAL_BLOCK_LIMIT);
 
   return {
     type: "modal",

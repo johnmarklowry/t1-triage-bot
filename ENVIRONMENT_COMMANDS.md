@@ -74,6 +74,16 @@ The bot updates a Slack user group with the current on-call participants (rotati
 
 **Slack scopes:** Staging auto-create and updates require **`usergroups:write`** (create) and **`usergroups.users:write`** (update members). If the bot lacks `usergroups:write`, staging will only work when `SLACK_USERGROUP_ID_STAGING` is set to an existing group. The workspace must allow the app to manage user groups (Slack: Workspace settings > Permissions > User Groups); otherwise the API returns `permission_denied`.
 
+## Release-team user group
+
+Release-team membership is refreshed from sprint assignments one Pacific calendar day before a sprint starts. The route updates Slack user group membership using full replace semantics, but preserves existing members when the computed set is empty.
+
+- **Production:** Set `SLACK_RELEASE_TEAM_USERGROUP_ID` to the release-team user group ID.
+- **Staging / local dev:** Set `SLACK_RELEASE_TEAM_USERGROUP_ID_STAGING` and keep it separate from production. If this is unset in staging, release-team sync is skipped.
+- **Optional topic updates:** Set `RELEASES_CHANNEL_ID` to update the releases channel topic with the computed member mentions.
+
+**Slack scopes:** release-team updates require **`usergroups.users:write`** and (if topic updates enabled) **`channels:manage`**/`conversations:write` permissions needed for `conversations.setTopic`.
+
 ## Configuration
 
 To configure the staging environment, set one of these environment variables:
@@ -130,6 +140,10 @@ To ensure rotation notifications run on infrastructure-managed cron instead of t
 3. **Webhook Configuration**  
    - Configure the Railway cron job to include the secret in header `X-Railway-Cron-Signature`.  
    - Confirm the webhook URL includes the correct environment domain (staging vs production).
+
+### Release-team cron route
+
+Configure a second Railway cron trigger targeting `POST /jobs/railway/update-release-team` on a daily schedule (for example `0 16 * * *` for 8:00 AM PT). The handler will no-op unless tomorrow in PT equals a sprint `startDate`.
 
 4. **Disable Legacy Scheduler**  
    - After verifying Railway cron, disable the `node-cron` job in `triageScheduler.js` (feature flag or removal).  

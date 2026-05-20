@@ -74,7 +74,7 @@ const UsersRepository = {
    */
   async getDisciplines() {
     const result = await query(`
-      SELECT discipline, slack_id, name
+      SELECT discipline, slack_id, name, on_release_team
       FROM users
       WHERE active = TRUE
       ORDER BY discipline, name
@@ -87,7 +87,8 @@ const UsersRepository = {
       }
       disciplines[row.discipline].push({
         slackId: row.slack_id,
-        name: row.name
+        name: row.name,
+        onReleaseTeam: row.on_release_team === true
       });
     });
     
@@ -99,7 +100,7 @@ const UsersRepository = {
    */
   async getUsersByDiscipline(discipline) {
     const result = await query(`
-      SELECT slack_id, name
+      SELECT slack_id, name, on_release_team
       FROM users
       WHERE discipline = $1
         AND active = TRUE
@@ -108,7 +109,8 @@ const UsersRepository = {
     
     return result.rows.map(row => ({
       slackId: row.slack_id,
-      name: row.name
+      name: row.name,
+      onReleaseTeam: row.on_release_team === true
     }));
   },
 
@@ -117,7 +119,7 @@ const UsersRepository = {
    */
   async getUsersByDisciplineIncludingInactive(discipline) {
     const result = await query(`
-      SELECT slack_id, name, active
+      SELECT slack_id, name, active, on_release_team
       FROM users
       WHERE discipline = $1
       ORDER BY active DESC, name
@@ -126,33 +128,36 @@ const UsersRepository = {
     return result.rows.map(row => ({
       slackId: row.slack_id,
       name: row.name,
-      active: row.active === true
+      active: row.active === true,
+      onReleaseTeam: row.on_release_team === true
     }));
   },
 
   /**
    * Add a user to a discipline using upsert
    */
-  async addUser(slackId, name, discipline, changedBy = 'system') {
+  async addUser(slackId, name, discipline, changedBy = 'system', onReleaseTeam = false) {
     return await withRetry(async () => {
       return await transaction(async (client) => {
         const result = await client.query(`
-          INSERT INTO users (slack_id, name, discipline, active)
-          VALUES ($1, $2, $3, TRUE)
+          INSERT INTO users (slack_id, name, discipline, active, on_release_team)
+          VALUES ($1, $2, $3, TRUE, $4)
           ON CONFLICT (slack_id, discipline) 
           DO UPDATE SET 
             name = EXCLUDED.name,
             active = TRUE,
+            on_release_team = EXCLUDED.on_release_team,
             updated_at = CURRENT_TIMESTAMP
           RETURNING id
-        `, [slackId, name, discipline]);
+        `, [slackId, name, discipline, onReleaseTeam === true]);
         
         const userId = result.rows[0].id;
         
         await logAudit('users', userId, 'UPSERT', null, {
           slack_id: slackId,
           name: name,
-          discipline: discipline
+          discipline: discipline,
+          on_release_team: onReleaseTeam === true
         }, changedBy, 'User added/updated in discipline');
         
         return userId;
@@ -165,7 +170,7 @@ const UsersRepository = {
    */
   async getAllUsers() {
     const result = await query(`
-      SELECT slack_id, name, discipline, active
+      SELECT slack_id, name, discipline, active, on_release_team
       FROM users
       ORDER BY active DESC, discipline, name
     `);
@@ -174,8 +179,46 @@ const UsersRepository = {
       slackId: row.slack_id,
       name: row.name,
       discipline: row.discipline,
-      active: row.active === true
+      active: row.active === true,
+      onReleaseTeam: row.on_release_team === true
     }));
+  },
+
+  /**
+   * Update release-team participation for a specific roster row.
+   */
+  async setReleaseTeamFlag(slackId, discipline, onReleaseTeam, changedBy = 'system') {
+    return await transaction(async (client) => {
+      const oldUser = await client.query(`
+        SELECT * FROM users WHERE slack_id = $1 AND discipline = $2
+      `, [slackId, discipline]);
+
+      if (oldUser.rows.length === 0) {
+        return false;
+      }
+
+      await client.query(`
+        UPDATE users
+        SET on_release_team = $3, updated_at = CURRENT_TIMESTAMP
+        WHERE slack_id = $1 AND discipline = $2
+      `, [slackId, discipline, onReleaseTeam === true]);
+
+      await logAudit('users', oldUser.rows[0].id, 'UPDATE', {
+        slack_id: oldUser.rows[0].slack_id,
+        name: oldUser.rows[0].name,
+        discipline: oldUser.rows[0].discipline,
+        active: oldUser.rows[0].active,
+        on_release_team: oldUser.rows[0].on_release_team === true
+      }, {
+        slack_id: oldUser.rows[0].slack_id,
+        name: oldUser.rows[0].name,
+        discipline: oldUser.rows[0].discipline,
+        active: oldUser.rows[0].active,
+        on_release_team: onReleaseTeam === true
+      }, changedBy, 'Release team flag updated');
+
+      return true;
+    });
   },
 
   /**

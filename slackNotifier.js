@@ -161,6 +161,32 @@ async function updateChannelTopic(userIdsArray) {
 }
 
 /**
+ * Updates the channel topic for releases channel (optional).
+ */
+async function updateReleasesChannelTopic(userIdsArray) {
+  if (!process.env.RELEASES_CHANNEL_ID) {
+    return;
+  }
+
+  try {
+    const uniqueIds = [...new Set((Array.isArray(userIdsArray) ? userIdsArray : []).filter(Boolean))];
+    const mentionList = uniqueIds.map(id => `<@${id}>`).join(', ');
+    const newTopic =
+      `Release ownership for upcoming sprint.\n` +
+      `Release Team: ${mentionList || '(none configured)'}`;
+
+    await slackClient.conversations.setTopic({
+      channel: process.env.RELEASES_CHANNEL_ID,
+      topic: newTopic
+    });
+    console.log(`[updateReleasesChannelTopic] Channel ${process.env.RELEASES_CHANNEL_ID} topic updated.`);
+  } catch (err) {
+    console.error('[updateReleasesChannelTopic] Error:', err);
+    await notifyAdmins(`Error updating releases channel topic for ${process.env.RELEASES_CHANNEL_ID}: ${err.message}`);
+  }
+}
+
+/**
  * Resolve staging on-call user group ID: find by handle or create. Cached per process.
  * @returns {Promise<string|null>} Usergroup ID or null on error / missing scope.
  */
@@ -265,6 +291,44 @@ async function updateOnCallUserGroup(userIdsArray) {
 }
 
 /**
+ * Updates the Slack user group for release-team members.
+ * In staging, uses SLACK_RELEASE_TEAM_USERGROUP_ID_STAGING and never touches production group.
+ * Empty input preserves existing membership (skip update).
+ */
+async function updateReleaseTeamUserGroup(userIdsArray) {
+  const deduped = [...new Set((Array.isArray(userIdsArray) ? userIdsArray : []).filter(Boolean))];
+  if (deduped.length === 0) {
+    console.warn('[updateReleaseTeamUserGroup] Empty member set; skipping Slack update to preserve existing release-team group membership.');
+    return;
+  }
+
+  const isStaging = config.isStaging;
+  const usergroupId = isStaging
+    ? process.env.SLACK_RELEASE_TEAM_USERGROUP_ID_STAGING
+    : process.env.SLACK_RELEASE_TEAM_USERGROUP_ID;
+
+  if (!usergroupId) {
+    if (isStaging) {
+      console.warn('[updateReleaseTeamUserGroup] Staging release-team group ID is missing (SLACK_RELEASE_TEAM_USERGROUP_ID_STAGING). Skipping update.');
+    } else {
+      console.warn('[updateReleaseTeamUserGroup] SLACK_RELEASE_TEAM_USERGROUP_ID is missing. Skipping update.');
+    }
+    return;
+  }
+
+  try {
+    await slackClient.usergroups.users.update({
+      usergroup: usergroupId,
+      users: deduped.join(',')
+    });
+    console.log('[updateReleaseTeamUserGroup] Release team user group updated successfully.');
+  } catch (err) {
+    console.error('[updateReleaseTeamUserGroup] Failed to update user group:', err);
+    await notifyAdmins(`Error updating release team Slack user group: ${err.message}`);
+  }
+}
+
+/**
  * Notify users whose rotation status changed.
  * @param {Array<{role: string, oldUser?: string|null, newUser?: string|null}>} changes
  */
@@ -302,6 +366,8 @@ module.exports = {
   notifyUser,
   notifyAdmins,
   updateOnCallUserGroup,
+  updateReleaseTeamUserGroup,
   updateChannelTopic,
+  updateReleasesChannelTopic,
   notifyRotationChanges
 };

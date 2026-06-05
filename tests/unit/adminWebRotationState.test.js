@@ -10,7 +10,7 @@ describe('adminWebRotationState helpers', () => {
     ]);
 
     expect(Object.keys(lists)).toEqual(['po', 'account']);
-    expect(lists.po.map((u) => u.name)).toEqual(['Amy', 'Zed']);
+    expect(lists.po.map((u) => u.name)).toEqual(['Zed', 'Amy']);
     expect(lists.account[0].active).toBe(false);
   });
 });

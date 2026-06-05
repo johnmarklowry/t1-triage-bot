@@ -41,7 +41,11 @@ function buildParticipantListsFromUsers(users) {
     });
   }
   for (const discipline of Object.keys(lists)) {
-    lists[discipline].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+    // Preserve repository / JSON rotation order; only sort inactive after active within each list.
+    lists[discipline].sort((a, b) => {
+      if (a.active === b.active) return 0;
+      return a.active ? -1 : 1;
+    });
   }
   return lists;
 }

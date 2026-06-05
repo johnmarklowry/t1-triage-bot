@@ -77,7 +77,7 @@ const UsersRepository = {
       SELECT discipline, slack_id, name
       FROM users
       WHERE active = TRUE
-      ORDER BY discipline, name
+      ORDER BY discipline, rotation_order ASC, name
     `);
     
     const disciplines = {};
@@ -103,7 +103,7 @@ const UsersRepository = {
       FROM users
       WHERE discipline = $1
         AND active = TRUE
-      ORDER BY name
+      ORDER BY rotation_order ASC, name
     `, [discipline]);
     
     return result.rows.map(row => ({
@@ -120,7 +120,7 @@ const UsersRepository = {
       SELECT slack_id, name, active
       FROM users
       WHERE discipline = $1
-      ORDER BY active DESC, name
+      ORDER BY active DESC, rotation_order ASC, name
     `, [discipline]);
 
     return result.rows.map(row => ({
@@ -136,16 +136,23 @@ const UsersRepository = {
   async addUser(slackId, name, discipline, changedBy = 'system') {
     return await withRetry(async () => {
       return await transaction(async (client) => {
+        const nextOrderResult = await client.query(`
+          SELECT COALESCE(MAX(rotation_order), -1) + 1 AS next_order
+          FROM users
+          WHERE discipline = $1
+        `, [discipline]);
+        const nextOrder = Number(nextOrderResult.rows[0]?.next_order ?? 0);
+
         const result = await client.query(`
-          INSERT INTO users (slack_id, name, discipline, active)
-          VALUES ($1, $2, $3, TRUE)
+          INSERT INTO users (slack_id, name, discipline, active, rotation_order)
+          VALUES ($1, $2, $3, TRUE, $4)
           ON CONFLICT (slack_id, discipline) 
           DO UPDATE SET 
             name = EXCLUDED.name,
             active = TRUE,
             updated_at = CURRENT_TIMESTAMP
           RETURNING id
-        `, [slackId, name, discipline]);
+        `, [slackId, name, discipline, nextOrder]);
         
         const userId = result.rows[0].id;
         
@@ -167,7 +174,7 @@ const UsersRepository = {
     const result = await query(`
       SELECT slack_id, name, discipline, active
       FROM users
-      ORDER BY active DESC, discipline, name
+      ORDER BY active DESC, discipline, rotation_order ASC, name
     `);
 
     return result.rows.map(row => ({
@@ -286,6 +293,62 @@ const UsersRepository = {
       }
       return true;
     });
+  },
+
+  /**
+   * Set rotation order for active users in a discipline (issue #1 web admin).
+   * @param {string} discipline
+   * @param {string[]} orderedSlackIds - active members in desired rotation order
+   */
+  async setDisciplineRotationOrder(discipline, orderedSlackIds, changedBy = 'system') {
+    return await transaction(async (client) => {
+      const existing = await client.query(`
+        SELECT id, slack_id, active
+        FROM users
+        WHERE discipline = $1
+        ORDER BY rotation_order ASC, name
+      `, [discipline]);
+
+      const activeIds = existing.rows.filter((r) => r.active === true).map((r) => r.slack_id);
+      const requested = Array.isArray(orderedSlackIds) ? orderedSlackIds : [];
+      if (requested.length !== activeIds.length) {
+        throw new Error('orderedSlackIds must include every active member exactly once');
+      }
+      const activeSet = new Set(activeIds);
+      if (requested.some((id) => !activeSet.has(id))) {
+        throw new Error('orderedSlackIds contains unknown or inactive members');
+      }
+      if (new Set(requested).size !== requested.length) {
+        throw new Error('orderedSlackIds contains duplicates');
+      }
+
+      for (let i = 0; i < requested.length; i++) {
+        await client.query(`
+          UPDATE users
+          SET rotation_order = $1, updated_at = CURRENT_TIMESTAMP
+          WHERE slack_id = $2 AND discipline = $3
+        `, [i, requested[i], discipline]);
+      }
+
+      await logAudit('users', 0, 'UPDATE', { discipline, activeIds }, {
+        discipline,
+        orderedSlackIds: requested,
+      }, changedBy, 'Discipline rotation order updated');
+
+      return true;
+    });
+  },
+
+  /**
+   * Next rotation_order slot when adding a user to a discipline.
+   */
+  async getNextRotationOrder(discipline) {
+    const result = await query(`
+      SELECT COALESCE(MAX(rotation_order), -1) + 1 AS next_order
+      FROM users
+      WHERE discipline = $1
+    `, [discipline]);
+    return Number(result.rows[0]?.next_order ?? 0);
   },
 
   /**

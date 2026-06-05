@@ -56,7 +56,9 @@ async function buildParticipantLists() {
     return buildParticipantListsFromUsers(users);
   } catch (err) {
     console.warn('[adminWebRotationState] UsersRepository failed, falling back to readDisciplines:', err.message);
-    const disciplines = await readDisciplines();
+    const { loadJSON } = require('../dataUtils');
+    const { getDisciplinesSourceFile } = require('./adminViews');
+    const disciplines = loadJSON(getDisciplinesSourceFile()) || {};
     const lists = {};
     for (const [discipline, members] of Object.entries(disciplines || {})) {
       if (!Array.isArray(members)) continue;

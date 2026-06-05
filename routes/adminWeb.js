@@ -228,6 +228,7 @@ function renderHtmlPage(snapshot, options = {}) {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
   <title>Triage rotation admin</title>
   <style>
     body { font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.4; max-width: 960px; }

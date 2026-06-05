@@ -128,5 +128,6 @@ async function buildAdminRotationSnapshot(options = {}) {
 module.exports = {
   ROLE_KEYS,
   buildAdminRotationSnapshot,
+  buildParticipantLists,
   buildParticipantListsFromUsers,
 };

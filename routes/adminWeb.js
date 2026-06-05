@@ -13,7 +13,7 @@
  */
 const express = require('express');
 const { requireAdminWebAuth } = require('../middleware/adminWebAuth');
-const { buildAdminRotationSnapshot, ROLE_KEYS } = require('../services/adminWebRotationState');
+const { buildAdminRotationSnapshot, buildParticipantLists, ROLE_KEYS } = require('../services/adminWebRotationState');
 const {
   addParticipant,
   deactivateParticipant,
@@ -353,10 +353,10 @@ async function moveParticipant(req, res, direction) {
     const slackId = req.params.slackId;
     let discipline = req.body?.discipline || req.query?.discipline;
 
-    const snapshot = await buildAdminRotationSnapshot({ upcomingLimit: 1 });
+    const participantLists = await buildParticipantLists();
     if (!discipline) {
       for (const role of ROLE_KEYS) {
-        const list = snapshot.participantLists?.[role] || [];
+        const list = participantLists[role] || [];
         if (list.some((m) => m.slackId === slackId && m.active !== false)) {
           discipline = role;
           break;
@@ -367,7 +367,7 @@ async function moveParticipant(req, res, direction) {
       throw new Error('Member not found in any discipline');
     }
 
-    const members = (snapshot.participantLists?.[discipline] || []).filter((m) => m.active !== false);
+    const members = (participantLists[discipline] || []).filter((m) => m.active !== false);
     const ids = members.map((m) => m.slackId);
     const index = ids.indexOf(slackId);
     if (index < 0) throw new Error('Member not found in discipline');

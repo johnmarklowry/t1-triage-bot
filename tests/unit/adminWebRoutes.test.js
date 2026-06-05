@@ -22,9 +22,14 @@ const approvePendingOverrideMock = mock(() => Promise.resolve({ rotationApplied:
 const declinePendingOverrideMock = mock(() => Promise.resolve({ declined: true }));
 const removeAdminOverrideMock = mock(() => Promise.resolve({ rotationApplied: false, updated: false }));
 
+const buildParticipantListsMock = mock(() => Promise.resolve({
+  po: [{ slackId: 'U1', name: 'Amy', active: true }],
+}));
+
 mock.module('../../services/adminWebRotationState', () => ({
   ROLE_KEYS: ['account', 'producer', 'po', 'uiEng', 'beEng'],
   buildAdminRotationSnapshot: buildSnapshotMock,
+  buildParticipantLists: buildParticipantListsMock,
   buildParticipantListsFromUsers: mock(() => ({})),
 }));
 
@@ -57,6 +62,7 @@ describe('adminWeb routes — participants', () => {
 
   beforeEach(() => {
     buildSnapshotMock.mockClear();
+    buildParticipantListsMock.mockClear();
     addParticipantMock.mockClear();
     deactivateParticipantMock.mockClear();
     reorderParticipantsMock.mockClear();

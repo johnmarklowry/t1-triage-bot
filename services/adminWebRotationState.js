@@ -96,13 +96,14 @@ async function buildAdminRotationSnapshot(options = {}) {
     currentRoles = await getSprintUsers(Number(sprintIndex));
   }
 
-  const upcomingSchedule = [];
-  for (const sprint of upcomingRaw.slice(0, upcomingLimit)) {
-    const normalized = normalizeSprintRow(sprint);
-    if (!normalized || normalized.sprintIndex == null) continue;
-    const roles = await getSprintUsers(Number(normalized.sprintIndex));
-    upcomingSchedule.push({ ...normalized, roles });
-  }
+  const upcomingSchedule = (await Promise.all(
+    (upcomingRaw || []).slice(0, upcomingLimit).map(async (sprint) => {
+      const normalized = normalizeSprintRow(sprint);
+      if (!normalized || normalized.sprintIndex == null) return null;
+      const roles = await getSprintUsers(Number(normalized.sprintIndex));
+      return { ...normalized, roles };
+    })
+  )).filter(Boolean);
 
   const pendingOverrides = overrides.filter((o) => !o.approved);
   const approvedOverrides = overrides.filter((o) => o.approved);

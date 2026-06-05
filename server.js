@@ -90,6 +90,14 @@ app.use('/auth', slackOAuthRouter);
 app.use('/admin/static', express.static(path.join(__dirname, 'public', 'admin')));
 app.use('/admin', adminWebRouter);
 
+// Monorail liveness probe — no auth, no DB dependency
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // Health check route with database status
 app.get('/', async (req, res) => {
   try {
@@ -126,7 +134,7 @@ async function initializeServer() {
     console.log('[SERVER] Initializing database...');
     
     // Only run custom migrations if not using Prisma Migrate
-    // Prisma Migrate is handled by Railway's startCommand: "npx prisma migrate deploy && npm start"
+    // Prisma Migrate runs in scripts/docker-entrypoint.sh on Monorail (and Railway startCommand).
     const usePrismaMigrations = process.env.USE_PRISMA_MIGRATIONS !== 'false';
     
     if (!usePrismaMigrations) {

@@ -1,0 +1,50 @@
+name: Deploy to Monorail (triage-bot)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.MONORAIL_PUSH_ROLE_ARN }}
+          aws-region: us-west-1
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Install Monorail CLI
+        env:
+          MONORAIL_API_URL: ${{ secrets.MONORAIL_API_URL }}
+          MONORAIL_DEPLOY_TOKEN: ${{ secrets.MONORAIL_DEPLOY_TOKEN }}
+        run: |
+          curl -fsSL -H "Authorization: Bearer $MONORAIL_DEPLOY_TOKEN" \
+            "$MONORAIL_API_URL/api/cli/v1/cli/download/linux-amd64/" \
+            -o monorail.tar.gz
+          sudo tar -xz -C /usr/local/bin -f monorail.tar.gz monorail
+          sudo chmod +x /usr/local/bin/monorail
+          rm monorail.tar.gz
+          monorail version
+
+      - name: Deploy via Monorail CLI
+        env:
+          MONORAIL_API_URL: ${{ secrets.MONORAIL_API_URL }}
+          MONORAIL_DEPLOY_TOKEN: ${{ secrets.MONORAIL_DEPLOY_TOKEN }}
+          MONORAIL_ECR_URI: ${{ secrets.MONORAIL_ECR_URI }}
+          MONORAIL_APP_SLUG: triage-bot
+          MONORAIL_MANIFEST_PATH: monorail.toml
+          GITHUB_BEFORE_SHA: ${{ github.event.before }}
+        run: monorail ci deploy

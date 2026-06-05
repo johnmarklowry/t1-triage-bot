@@ -1,0 +1,74 @@
+# Monorail manifest — Triage rotation bot (Slack + web admin)
+#
+# Production: https://triage-bot.monorail.t1infra.net
+# Staging:    set APP_ENV=staging in Monorail secrets for the bot workload
+
+[app]
+slug = "triage-bot"
+repo = "t1p1/triage-bot"
+runtime = "node"
+kind = "web"
+
+[deploy]
+trigger_mode = "auto_on_push"
+deploy_branch = "main"
+
+[[managed_services]]
+kind = "rds_postgres"
+
+[resources]
+cpu = "2048"
+memory = "4096"
+min_replicas = 1
+max_replicas = 1
+
+[environments.production]
+replicas = 1
+port = 3000
+health_check_path = "/health"
+
+[environments.staging]
+replicas = 1
+port = 3000
+health_check_path = "/health"
+
+# Public web workload — Slack HTTP events, admin UI, health checks
+[[workloads]]
+slug = "bot"
+kind = "deployment"
+public = true
+
+[[workloads.containers]]
+name = "bot"
+primary = true
+dockerfile = "Dockerfile"
+build_context = "."
+port = 3000
+healthcheck = "http:/health"
+
+[workloads.containers.env]
+NODE_ENV = "production"
+PORT = "3000"
+# Monorail: use HTTP Slack events (not Socket Mode). Set secrets in Monorail console:
+# SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET, ADMIN_CHANNEL_ID, SESSION_SECRET, etc.
+SOCKET_MODE = "false"
+ENABLE_IN_APP_CRON = "false"
+
+# Daily rotation notification job (replaces Railway cron webhook).
+# Schedule matches former RAILWAY_CRON_SCHEDULE=0 16 * * * (16:00 UTC).
+[[workloads]]
+slug = "notify-rotation"
+kind = "cronjob"
+schedule = 'cron("0 16 * * *")'
+public = false
+
+[[workloads.containers]]
+name = "notify-rotation"
+primary = true
+dockerfile = "Dockerfile"
+build_context = "."
+command = ["node", "jobs/runNotifyRotationCli.js"]
+
+[workloads.containers.env]
+NODE_ENV = "production"
+ENABLE_IN_APP_CRON = "false"

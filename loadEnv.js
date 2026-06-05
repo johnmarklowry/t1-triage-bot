@@ -26,6 +26,9 @@ function loadEnv() {
   if (fs.existsSync(envLocalPath)) {
     dotenv.config({ path: envLocalPath, override: true });
   }
+
+  // Monorail injects POSTGRES_*; construct DATABASE_URL before DB clients load.
+  require('./lib/databaseUrl').ensureDatabaseUrl();
 }
 
 module.exports = { loadEnv };

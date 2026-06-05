@@ -6,6 +6,7 @@
 const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
+const { ensureDatabaseUrl, shouldUseDatabaseSsl } = require('../lib/databaseUrl');
 
 // Load environment variables: .env first, then .env.local (if exists) overrides
 require('dotenv').config(); // Load .env
@@ -18,25 +19,50 @@ let pool = null;
 /**
  * Parse DATABASE_URL or build config from individual environment variables
  */
+function poolOptionsFromEnv() {
+  return {
+    max: parseInt(process.env.DB_MAX_CONNECTIONS, 10) || 20,
+    min: parseInt(process.env.DB_MIN_CONNECTIONS, 10) || 2,
+    idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT, 10) || 30000,
+    connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT, 10) || 2000,
+  };
+}
+
 function getDatabaseConfig() {
-  // Enforce DATABASE_URL in production environments
-  if ((process.env.NODE_ENV === 'production') && !process.env.DATABASE_URL) {
-    throw new Error('[DB] DATABASE_URL is required in production environment');
+  ensureDatabaseUrl();
+
+  if (process.env.NODE_ENV === 'production' && !process.env.DATABASE_URL && !process.env.POSTGRES_HOST) {
+    throw new Error('[DB] DATABASE_URL or POSTGRES_* is required in production');
   }
 
-  // Check if DATABASE_URL is provided (Railway convention)
   if (process.env.DATABASE_URL) {
     console.log('[DB] Using DATABASE_URL from environment');
-    return {
+    const config = {
       connectionString: process.env.DATABASE_URL,
-      max: parseInt(process.env.DB_MAX_CONNECTIONS) || 20,
-      min: parseInt(process.env.DB_MIN_CONNECTIONS) || 2,
-      idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000,
-      connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 2000,
+      ...poolOptionsFromEnv(),
     };
+    if (shouldUseDatabaseSsl()) {
+      config.ssl = { rejectUnauthorized: false };
+    }
+    return config;
   }
 
-  // Fallback to individual environment variables (for local development)
+  if (process.env.POSTGRES_HOST) {
+    console.log('[DB] Using Monorail POSTGRES_* environment variables');
+    const config = {
+      host: process.env.POSTGRES_HOST,
+      port: parseInt(process.env.POSTGRES_PORT, 10) || 5432,
+      database: process.env.POSTGRES_DB,
+      user: process.env.POSTGRES_USER,
+      password: process.env.POSTGRES_PASSWORD,
+      ...poolOptionsFromEnv(),
+    };
+    if (shouldUseDatabaseSsl()) {
+      config.ssl = { rejectUnauthorized: false };
+    }
+    return config;
+  }
+
   console.log('[DB] Using individual database environment variables');
   return {
     host: process.env.DB_HOST || 'localhost',
@@ -44,10 +70,7 @@ function getDatabaseConfig() {
     database: process.env.DB_NAME || 'triage_bot',
     user: process.env.DB_USER || 'postgres',
     password: process.env.DB_PASSWORD || '',
-    max: parseInt(process.env.DB_MAX_CONNECTIONS) || 20,
-    min: parseInt(process.env.DB_MIN_CONNECTIONS) || 2,
-    idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT) || 30000,
-    connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT) || 2000,
+    ...poolOptionsFromEnv(),
   };
 }
 

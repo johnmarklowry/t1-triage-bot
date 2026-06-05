@@ -278,7 +278,6 @@ function jsonError(res, status, message) {
 
 async function redirectToDashboard(req, res, flash) {
   const tokenSuffix = tokenQuery(req);
-  const snapshot = await buildAdminRotationSnapshot({ upcomingLimit: 5 });
   const qs = tokenSuffix ? `${tokenSuffix}&` : '?';
   if (flash) {
     res.redirect(303, `/admin${qs}flash=${encodeURIComponent(flash.type)}&msg=${encodeURIComponent(flash.message)}`);

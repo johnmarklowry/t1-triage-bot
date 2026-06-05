@@ -26,7 +26,7 @@ const router = express.Router();
 
 function safeReturnTo(value) {
   if (typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//')) {
-    return '/admin';
+    return '/dashboard';
   }
   return value;
 }
@@ -88,7 +88,7 @@ router.get('/slack/callback', async (req, res) => {
 
 router.post('/logout', (req, res) => {
   res.setHeader('Set-Cookie', clearSessionCookie());
-  return res.redirect('/admin');
+  return res.redirect('/dashboard');
 });
 
 module.exports = router;

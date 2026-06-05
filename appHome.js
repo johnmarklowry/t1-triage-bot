@@ -38,6 +38,12 @@ const {
 
 // Import environment-specific command utilities
 const { getEnvironmentCommand } = require('./commandUtils');
+const {
+  isSlackAdminManagementDeprecated,
+  buildDeprecatedAdminHubModalView,
+  isSlackOverrideRequestDeprecated,
+  buildDeprecatedOverrideRequestMessage,
+} = require('./lib/slackAdminDeprecation');
 const cache = require('./cache/redisClient');
 
 dayjs.extend(utc);
@@ -213,13 +219,13 @@ async function getNextOnCall() {
 /**
  * Role display mapping for friendly names.
  */
-const ROLE_DISPLAY = {
-  account: "Account",
-  producer: "Producer",
-  po: "PO",
-  uiEng: "UI Engineer",
-  beEng: "BE Engineer"
-};
+const {
+  ROLE_DISPLAY,
+  formatTimeRemaining,
+  formatDaysUntil,
+  getUserOnCallStatus,
+  getUserUpcomingShifts,
+} = require('./services/userRotationView');
 
 // NOTE: Role icons removed (no emojis in user-facing surfaces).
 
@@ -270,231 +276,6 @@ function buildContextBlock(text) {
   };
 }
 
-/**
- * Format time remaining until a date
- * @param {string} endDate - End date in YYYY-MM-DD format
- * @returns {string} Formatted time remaining (e.g., "2 days, 5 hours remaining" or "Ends today")
- */
-function formatTimeRemaining(endDate) {
-  const endStart = parsePTDate(endDate);
-  if (!endStart) return "Ended";
-  const end = endStart.endOf('day');
-  const now = dayjs().tz("America/Los_Angeles");
-  const diff = end.diff(now);
-  
-  if (diff < 0) {
-    return "Ended";
-  }
-  
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-  const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-  
-  if (days === 0 && hours === 0) {
-    return `Ends in ${minutes} minute${minutes !== 1 ? 's' : ''}`;
-  } else if (days === 0) {
-    return `Ends in ${hours} hour${hours !== 1 ? 's' : ''}`;
-  } else if (days === 1) {
-    return `Ends tomorrow`;
-  } else {
-    return `${days} day${days !== 1 ? 's' : ''} remaining`;
-  }
-}
-
-/**
- * Format days until a date
- * @param {string} startDate - Start date in YYYY-MM-DD format
- * @returns {string} Formatted days until (e.g., "In 3 days" or "Starts tomorrow")
- */
-function formatDaysUntil(startDate) {
-  const start = parsePTDate(startDate);
-  if (!start) return "Starts";
-  const now = getTodayPT();
-  const days = start.diff(now, 'day');
-  
-  if (days < 0) {
-    return "Started";
-  } else if (days === 0) {
-    return "Starts today";
-  } else if (days === 1) {
-    return "Starts tomorrow";
-  } else {
-    return `In ${days} days`;
-  }
-}
-
-/**
- * Get user's on-call status for current rotation
- * @param {string} userId - Slack user ID
- * @param {Object|null} currentRotation - Current rotation object or null
- * @returns {Object|null} Status object with { isOnCall, role, timeRemaining } or null
- */
-function getUserOnCallStatus(userId, currentRotation) {
-  if (!currentRotation || !userId) {
-    return null;
-  }
-  
-  const userOnCall = currentRotation.users.find(u => u.slackId === userId);
-  if (!userOnCall) {
-    return null;
-  }
-  
-  return {
-    isOnCall: true,
-    role: userOnCall.role,
-    roleDisplay: ROLE_DISPLAY[userOnCall.role] || userOnCall.role,
-    timeRemaining: formatTimeRemaining(currentRotation.endDate),
-    sprintIndex: currentRotation.sprintIndex,
-    sprintName: currentRotation.sprintName,
-    startDate: currentRotation.startDate,
-    endDate: currentRotation.endDate
-  };
-}
-
-/**
- * Get user's upcoming shifts (sprints where they are scheduled)
- * @param {string} userId - Slack user ID
- * @param {Array} sprints - Array of all sprints
- * @param {Object} disciplines - Disciplines object with role arrays
- * @param {Object} [options]
- * @param {number} [options.limit] - Maximum number of shifts to return (for preview/paging)
- * @returns {Promise<Array>} Array of upcoming shift objects
- */
-async function getUserUpcomingShifts(userId, sprints, disciplines, options = {}) {
-  if (!userId || !sprints || !disciplines) {
-    return [];
-  }
-
-  const rawLimit = Number(options?.limit);
-  const limit = Number.isFinite(rawLimit) ? Math.max(1, rawLimit) : null;
-  
-  // Find which role the user is in
-  let userRole = null;
-  let userIndex = -1;
-  
-  for (const [role, roleList] of Object.entries(disciplines)) {
-    const index = roleList.findIndex(u => u.slackId === userId);
-    if (index !== -1) {
-      userRole = role;
-      userIndex = index;
-      break;
-    }
-  }
-  
-  if (!userRole || userIndex === -1) {
-    return [];
-  }
-  
-  const roleList = disciplines[userRole];
-  const upcomingShifts = [];
-  const today = dayjs().tz("America/Los_Angeles");
-
-  // Build lookup for Slack ID -> display name (for nicer team display)
-  const nameBySlackId = {};
-  if (disciplines && typeof disciplines === 'object') {
-    for (const users of Object.values(disciplines)) {
-      if (!Array.isArray(users)) continue;
-      for (const u of users) {
-        if (u?.slackId && u?.name && !nameBySlackId[u.slackId]) {
-          nameBySlackId[u.slackId] = u.name;
-        }
-      }
-    }
-  }
-
-  // Load overrides once (avoid per-sprint reads) and index them for fast lookup
-  const overrides = await readOverrides();
-  const overrideBySprintRole = new Map();
-  for (const o of (Array.isArray(overrides) ? overrides : [])) {
-    if (!o || o.approved !== true) continue;
-    if (o.sprintIndex === null || o.sprintIndex === undefined) continue;
-    if (!o.role) continue;
-    overrideBySprintRole.set(`${o.sprintIndex}:${o.role}`, o);
-  }
-  
-  // Check each sprint to see if user is scheduled
-  for (let i = 0; i < sprints.length; i++) {
-    const sprint = sprints[i];
-    const sprintStart = dayjs(sprint.startDate).tz("America/Los_Angeles");
-    
-    // Only include future sprints
-    if (sprintStart.isAfter(today) || sprintStart.isSame(today, 'day')) {
-      const override = overrideBySprintRole.get(`${i}:${userRole}`) || null;
-
-      // Calculate if user is assigned to this sprint (base rotation)
-      const assignedIndex = i % roleList.length;
-      const isBaseAssigned = assignedIndex === userIndex;
-
-      // Overrides can either remove the user from their base shift, or assign them to cover.
-      const isAssignedByOverride = !!override && override.newSlackId === userId;
-      const isRemovedByOverride = isBaseAssigned && !!override && override.newSlackId !== userId;
-
-      const shouldInclude = (isBaseAssigned && !isRemovedByOverride) || isAssignedByOverride;
-      if (!shouldInclude) continue;
-
-      const sprintUsers = await getSprintUsers(i);
-      const rotationLines = [];
-      for (const role of ["account", "producer", "po", "uiEng", "beEng"]) {
-        const slackId = sprintUsers?.[role] || null;
-        const displayRole = ROLE_DISPLAY[role] || role;
-        if (!slackId) {
-          rotationLines.push(`*${displayRole}*: _Unassigned_`);
-          continue;
-        }
-        const name = nameBySlackId[slackId];
-        const suffix = slackId === userId ? ' (you)' : '';
-        rotationLines.push(
-          name
-            ? `*${displayRole}*: ${name} (<@${slackId}>)${suffix}`
-            : `*${displayRole}*: <@${slackId}>${suffix}`
-        );
-      }
-
-      upcomingShifts.push({
-        sprintIndex: i,
-        sprintName: sprint.sprintName,
-        startDate: sprint.startDate,
-        endDate: sprint.endDate,
-        role: userRole,
-        roleDisplay: ROLE_DISPLAY[userRole] || userRole,
-        daysUntil: formatDaysUntil(sprint.startDate),
-        rotationUsers: sprintUsers || null,
-        rotationText: rotationLines.join('\n')
-      });
-
-      if (limit && upcomingShifts.length >= limit) {
-        break;
-      }
-    }
-  }
-  
-  return upcomingShifts;
-}
-
-/**
- * Build Block Kit blocks for the current rotation section.
- * 
- * Block Kit Best Practices Applied:
- * - Header block for section title (visual hierarchy)
- * - Section block with fields array for compact display of sprint name and dates
- * - Context block for date range (secondary information)
- * - Individual section blocks for each user role (clear separation)
- * - All text uses mrkdwn formatting for rich text (bold, mentions)
- * 
- * Error Handling Pattern:
- * - Returns user-friendly message when current rotation is null
- * - Message: "_No active sprint found._" (not technical error)
- * - Allows home tab to display other sections even if current is missing
- * 
- * Accessibility: All blocks include descriptive text, not just emoji or icons.
- * 
- * @param {Object|null} cur - Current rotation data with sprintName, startDate, endDate, and users array, or null
- * @param {string} cur.sprintName - Name of the current sprint
- * @param {string} cur.startDate - Start date in YYYY-MM-DD format
- * @param {string} cur.endDate - End date in YYYY-MM-DD format
- * @param {Array<Object>} cur.users - Array of user objects with role, name, and slackId
- * @returns {Array<Object>} Array of Slack Block Kit blocks (header, section with fields, context, user sections)
- */
 /**
  * Build compact rotation card showing all roles in a grid layout
  * @param {Object} rotation - Rotation object with users array
@@ -1662,6 +1443,15 @@ slackApp.action('load_more_upcoming_sprints', async ({ ack, body, client, logger
 slackApp.action('request_coverage_from_home', async ({ ack, body, client, logger }) => {
   await ack();
   try {
+    if (isSlackOverrideRequestDeprecated()) {
+      await client.chat.postEphemeral({
+        channel: body.channel?.id || body.user.id,
+        user: body.user.id,
+        text: buildDeprecatedOverrideRequestMessage(),
+      });
+      return;
+    }
+
     const interactivityPointer =
       body?.interactivity?.interactivity_pointer ||
       body?.interactivity_pointer ||
@@ -2187,6 +1977,10 @@ slackApp.action('view_discipline_lists', async ({ ack, body, client, logger }) =
 });
 
 function buildAdminHubModalView() {
+  if (isSlackAdminManagementDeprecated()) {
+    return buildDeprecatedAdminHubModalView();
+  }
+
   return {
     type: 'modal',
     callback_id: 'admin_hub_modal',

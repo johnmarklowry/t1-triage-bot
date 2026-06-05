@@ -26,6 +26,8 @@ const {
   declinePendingOverride,
   removeAdminOverride,
 } = require('../services/adminWebOverrides');
+const { renderAdminShell, escapeHtml: shellEscapeHtml } = require('../lib/adminWebShell');
+const { isSlackOAuthConfigured } = require('../lib/slackOAuthConfig');
 
 const router = express.Router();
 
@@ -160,7 +162,7 @@ function renderParticipantLists(participantLists, tokenSuffix, flash) {
   }
 
   const flashHtml = flash
-    ? `<p class="flash ${escapeHtml(flash.type)}">${escapeHtml(flash.message)}</p>`
+    ? `<div class="t1-flash t1-flash--${escapeHtml(flash.type === 'error' ? 'error' : 'ok')}">${escapeHtml(flash.message)}</div>`
     : '';
 
   const sections = ROLE_KEYS.map((discipline) => {
@@ -216,61 +218,50 @@ function renderParticipantLists(participantLists, tokenSuffix, flash) {
 }
 
 function renderHtmlPage(snapshot, options = {}) {
-  const sprint = snapshot.currentSprint;
-  const sprintHeading = sprint
-    ? `${escapeHtml(sprint.sprintName)} (index ${escapeHtml(sprint.sprintIndex)})`
-    : 'No active sprint for today';
   const tokenSuffix = options.tokenSuffix || '';
   const flash = options.flash || null;
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="referrer" content="no-referrer" />
-  <title>Triage rotation admin</title>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.4; max-width: 960px; }
-    table { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1.5rem; }
-    th, td { border: 1px solid #ccc; padding: 0.35rem 0.5rem; text-align: left; vertical-align: middle; }
-    th { background: #f5f5f5; width: 8rem; }
-    section { margin-bottom: 1.5rem; }
-    .meta { color: #555; font-size: 0.9rem; }
-    .discipline h3 { margin-bottom: 0.25rem; text-transform: capitalize; }
-    .add-form { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; margin-bottom: 1rem; }
-    .add-form label { display: flex; flex-direction: column; font-size: 0.85rem; }
-    .actions form { margin-right: 0.25rem; }
-    tr.inactive td { color: #666; font-style: italic; }
-    .flash { padding: 0.5rem 0.75rem; border-radius: 4px; margin-bottom: 1rem; }
-    .flash.ok { background: #e8f5e9; border: 1px solid #a5d6a7; }
-    .flash.error { background: #ffebee; border: 1px solid #ef9a9a; }
-  </style>
-</head>
-<body>
-  <h1>Rotation administration</h1>
-  <p class="meta">Environment: <strong>${escapeHtml(snapshot.environment)}</strong> · Generated ${escapeHtml(snapshot.generatedAt)}</p>
-  <section>
-    <h2>Current sprint</h2>
-    <p>${sprintHeading}</p>
-    ${renderRolesTable(snapshot.currentRoles)}
-  </section>
-  <section>
-    <h2>Participant lists</h2>
-    <p class="meta">Add, remove (deactivate), or reorder rotation members per discipline.</p>
-    ${renderParticipantLists(snapshot.participantLists, tokenSuffix, flash)}
-  </section>
-  <section>
-    <h2>Coverage overrides</h2>
-    <p class="meta">Approve, decline, or remove coverage overrides. Current-sprint changes sync on-call state automatically.</p>
-    ${renderOverridesSection(snapshot, tokenSuffix)}
-  </section>
-  <section>
-    <h2>Upcoming schedule</h2>
-    ${renderUpcoming(snapshot.upcomingSchedule)}
-  </section>
-</body>
-</html>`;
+  const sprint = snapshot.currentSprint;
+  const sprintHeading = sprint
+    ? `${shellEscapeHtml(sprint.sprintName)} (index ${shellEscapeHtml(sprint.sprintIndex)})`
+    : 'No active sprint for today';
+
+  const contentHtml = `
+    <p class="t1-meta">Environment: <strong>${shellEscapeHtml(snapshot.environment)}</strong> · Generated ${shellEscapeHtml(snapshot.generatedAt)}</p>
+    ${flash ? `<div class="t1-flash t1-flash--${flash.type === 'error' ? 'error' : 'ok'}">${shellEscapeHtml(flash.message)}</div>` : ''}
+    <section class="t1-section">
+      <h2>Current sprint</h2>
+      <p class="t1-meta">${sprintHeading}</p>
+      ${renderRolesTable(snapshot.currentRoles)}
+    </section>
+    <section class="t1-section">
+      <h2>Participant lists</h2>
+      <p class="t1-meta">Add, remove (deactivate), or reorder rotation members per discipline.</p>
+      ${renderParticipantLists(snapshot.participantLists, tokenSuffix, null)}
+    </section>
+    <section class="t1-section">
+      <h2>Coverage overrides</h2>
+      <p class="t1-meta">Approve, decline, or remove coverage overrides.</p>
+      ${renderOverridesSection(snapshot, tokenSuffix)}
+    </section>
+    <section class="t1-section">
+      <h2>Upcoming schedule</h2>
+      ${renderUpcoming(snapshot.upcomingSchedule)}
+    </section>`;
+
+  return renderAdminShell({
+    pageTitle: 'Triage Admin',
+    heading: 'Rotation administration',
+    subtitle: 'Administration',
+    contentHtml,
+    user: options.user || null,
+    authMode: options.authMode || '',
+    showSignOut: isSlackOAuthConfigured(),
+    navItems: [
+      { href: '/dashboard', label: 'My schedule', active: false },
+      { href: '/admin', label: 'Admin', active: true },
+    ],
+  });
 }
 
 function jsonError(res, status, message) {
@@ -460,7 +451,12 @@ router.get('/', async (req, res) => {
         message: String(req.query.msg),
       };
     }
-    res.type('html').send(renderHtmlPage(snapshot, { tokenSuffix, flash }));
+    res.type('html').send(renderHtmlPage(snapshot, {
+      tokenSuffix,
+      flash,
+      user: req.slackUser,
+      authMode: isSlackOAuthConfigured() ? 'Slack OAuth' : 'WEB_ADMIN_SECRET',
+    }));
   } catch (error) {
     console.error('[adminWeb] dashboard failed:', error);
     res.status(500).type('html').send(`<pre>${escapeHtml(error.message)}</pre>`);

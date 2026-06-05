@@ -22,7 +22,7 @@ const {
   upsertSprint
 } = require('./dataUtils');
 
-const {
+const { 
   DISCIPLINE_OPTIONS,
   getDisciplinesSourceFile,
   buildConfirm,
@@ -30,6 +30,7 @@ const {
   buildAdminSprintsModalView,
   buildAdminUsersModalView
 } = require('./services/adminViews');
+const { guardDeprecatedAdminCommand } = require('./lib/slackAdminDeprecation');
 
 /**
  * Prefer explicit display name; otherwise resolve from Slack users.info (same precedence as disciplines add-member).
@@ -66,6 +67,15 @@ async function resolveSlackUserDisplayName(client, slackId, explicitName, logger
 slackApp.command(getEnvironmentCommand('admin-sprints'), async ({ command, ack, client, logger }) => {
   // Acknowledge immediately to prevent timeout
   await ack();
+
+  if (await guardDeprecatedAdminCommand({
+    client,
+    command,
+    logger,
+    surface: '/admin-sprints',
+  })) {
+    return;
+  }
   
   try {
     // Check if user is in admin channel
@@ -456,6 +466,15 @@ slackApp.action('add_sprint', async ({ ack, body, client, logger }) => {
  */
 slackApp.command(getEnvironmentCommand('admin-disciplines'), async ({ command, ack, client, logger }) => {
   await ack();
+
+  if (await guardDeprecatedAdminCommand({
+    client,
+    command,
+    logger,
+    surface: '/admin-disciplines',
+  })) {
+    return;
+  }
   
   try {
     // Check if user is in admin channel
@@ -705,6 +724,16 @@ slackApp.view('admin_disciplines_add_member_modal', async ({ ack, body, view, cl
  */
 slackApp.command(getEnvironmentCommand('admin-users'), async ({ command, ack, client, logger }) => {
   await ack();
+
+  if (await guardDeprecatedAdminCommand({
+    client,
+    command,
+    logger,
+    surface: '/admin-users',
+  })) {
+    return;
+  }
+
   try {
     const isAdmin = command.channel_id === process.env.ADMIN_CHANNEL_ID;
     if (!isAdmin) {

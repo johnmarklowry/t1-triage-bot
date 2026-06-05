@@ -18,6 +18,10 @@ const isolatedSuites = new Set([
   'tests/unit/adminWebParticipants.test.js',
   'tests/unit/adminWebOverrides.test.js',
   'tests/unit/adminWebRoutes.test.js',
+  'tests/unit/dashboardWebRoutes.test.js',
+  'tests/unit/overrideHandler.list.test.js',
+  'tests/unit/scheduleCommandHandler.test.js',
+  'tests/unit/userRotationView.test.js',
 ]);
 
 function walk(dir) {

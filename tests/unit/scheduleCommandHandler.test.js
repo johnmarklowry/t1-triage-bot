@@ -4,6 +4,16 @@ const readSprintsMock = mock();
 const parsePTDateMock = mock();
 const formatPTDateMock = mock();
 
+function ptDayjs(str) {
+  if (!str) return null;
+  const dayjs = require('dayjs');
+  const utc = require('dayjs/plugin/utc');
+  const tz = require('dayjs/plugin/timezone');
+  dayjs.extend(utc);
+  dayjs.extend(tz);
+  return dayjs.tz(`${str}T00:00:00`, 'America/Los_Angeles');
+}
+
 mock.module('../../appHome', () => ({
   slackApp: { command: () => {}, view: () => {} },
 }));
@@ -22,6 +32,7 @@ describe('scheduleCommandHandler', () => {
   beforeEach(() => {
     mock.clearAllMocks();
     formatPTDateMock.mockImplementation((d, fmt) => (fmt === 'YYYY-MM-DD' ? d : d || 'formatted'));
+    parsePTDateMock.mockImplementation(ptDayjs);
   });
 
   describe('findSprintForDate', () => {
@@ -31,13 +42,6 @@ describe('scheduleCommandHandler', () => {
         { sprintName: 'S2', startDate: '2026-01-15', endDate: '2026-01-28' },
       ];
       readSprintsMock.mockResolvedValue(sprints);
-      const dayjs = require('dayjs');
-      const tz = require('dayjs/plugin/timezone');
-      dayjs.extend(tz);
-      parsePTDateMock.mockImplementation((str) => {
-        if (!str) return null;
-        return dayjs.tz(`${str}T00:00:00`, 'America/Los_Angeles');
-      });
 
       const midSprintDate = new Date('2026-01-08T12:00:00-08:00');
       const result = await findSprintForDate(midSprintDate);
@@ -53,13 +57,6 @@ describe('scheduleCommandHandler', () => {
       readSprintsMock.mockResolvedValue([
         { sprintName: 'S1', startDate: '2026-01-01', endDate: '2026-01-14' },
       ]);
-      parsePTDateMock.mockImplementation((str) => {
-        if (!str) return null;
-        const dayjs = require('dayjs');
-        const tz = require('dayjs/plugin/timezone');
-        dayjs.extend(tz);
-        return dayjs.tz(`${str}T00:00:00`, 'America/Los_Angeles');
-      });
 
       const outsideDate = new Date('2025-12-01T12:00:00-08:00');
       const result = await findSprintForDate(outsideDate);

@@ -51,6 +51,7 @@ const { runMigrations } = require('./db/migrate');
 const { setupDatabase } = require('./setup-database');
 const railwayCronRouter = require('./routes/railwayCron');
 const slackOAuthRouter = require('./routes/slackOAuth');
+const dashboardWebRouter = require('./routes/dashboardWeb');
 const adminWebRouter = require('./routes/adminWeb');
 
 const app = express();
@@ -87,6 +88,7 @@ app.use((req, res, next) => {
 app.use('/test', testRoutes);
 app.use('/jobs', railwayCronRouter);
 app.use('/auth', slackOAuthRouter);
+app.use('/dashboard', dashboardWebRouter);
 app.use('/admin/static', express.static(path.join(__dirname, 'public', 'admin')));
 app.use('/admin', adminWebRouter);
 

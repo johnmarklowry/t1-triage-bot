@@ -273,6 +273,44 @@ body.t1-shell {
   display: inline;
 }
 
+.t1-nav__link {
+  display: block;
+  padding: 0.75rem 2rem;
+  font-size: 0.625rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: rgba(255, 255, 255, 0.5);
+  border-left: 2px solid transparent;
+}
+
+.t1-nav__link:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.t1-nav__link--active {
+  color: #fff;
+  border-left-color: var(--t1-blue);
+  background: rgba(29, 44, 239, 0.15);
+}
+
+.t1-sidebar__nav {
+  padding: 1rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+select,
+input[type="text"] {
+  font-family: inherit;
+  font-size: 0.875rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--t1-slate-200);
+  border-radius: 2px;
+  min-width: 16rem;
+}
+
 @media (max-width: 768px) {
   .t1-layout {
     flex-direction: column;

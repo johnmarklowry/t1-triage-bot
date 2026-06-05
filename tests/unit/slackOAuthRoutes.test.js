@@ -40,7 +40,7 @@ describe('slack OAuth routes', () => {
     const app = express();
     app.use('/auth', slackOAuthRouter);
 
-    const start = await request(app).get('/auth/slack?returnTo=/admin').expect(302);
+    const start = await request(app).get('/auth/slack').expect(302);
     const stateCookie = start.headers['set-cookie'].find((c) => c.startsWith('triage_oauth_state='));
     const stateMatch = start.headers.location.match(/state=([^&]+)/);
     expect(stateMatch).not.toBeNull();
@@ -69,7 +69,7 @@ describe('slack OAuth routes', () => {
       .set('Cookie', stateCookie)
       .expect(302);
 
-    expect(res.headers.location).toBe('/admin');
+    expect(res.headers.location).toBe('/dashboard');
     expect(res.headers['set-cookie'].join(';')).toContain('triage_session=');
   });
 });

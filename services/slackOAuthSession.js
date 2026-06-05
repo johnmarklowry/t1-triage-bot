@@ -156,6 +156,17 @@ function readOAuthStateFromRequest(req) {
   return envelope;
 }
 
+function createCsrfToken(slackUserId) {
+  const secret = getSessionSecret();
+  return createSignedToken({ slackUserId, purpose: 'csrf' }, secret, 60 * 60 * 1000);
+}
+
+function validateCsrfToken(token, slackUserId) {
+  const secret = getSessionSecret();
+  const envelope = parseSignedToken(token, secret);
+  return envelope?.purpose === 'csrf' && envelope?.slackUserId === slackUserId;
+}
+
 module.exports = {
   SESSION_COOKIE,
   OAUTH_STATE_COOKIE,
@@ -167,4 +178,6 @@ module.exports = {
   readOAuthStateFromRequest,
   parseSignedToken,
   createSignedToken,
+  createCsrfToken,
+  validateCsrfToken,
 };

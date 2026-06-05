@@ -12,6 +12,11 @@ const cache = require('./cache/redisClient');
 const { findCurrentSprint, getSprintUsers, readSprints, getRoleAndDisciplinesForUser } = require('./dataUtils');
 const { applyCurrentSprintRotation } = require('./triageLogic');
 const { isUserInAdminChannel, DEFAULT_TTL_MS } = require('./services/adminMembership');
+const {
+  guardDeprecatedAdminCommand,
+  guardDeprecatedOverrideRequest,
+  guardDeprecatedOverrideShortcut,
+} = require('./lib/slackAdminDeprecation');
 
 // Import database repositories
 const { UsersRepository, OverridesRepository } = require('./db/repository');
@@ -327,6 +332,10 @@ async function getAllOverrides() {
 slackApp.command(getEnvironmentCommand('triage-override'), async ({ command, ack, client, logger }) => {
   await ack();
 
+  if (await guardDeprecatedOverrideRequest({ client, command, logger })) {
+    return;
+  }
+
   const interactivityPointer =
     command?.interactivity?.interactivity_pointer ||
     command?.interactivity_pointer ||
@@ -378,6 +387,9 @@ slackApp.command(getEnvironmentCommand('triage-override'), async ({ command, ack
  */
 slackApp.shortcut('request_coverage_shortcut', async ({ shortcut, ack, client, logger }) => {
   await ack();
+  if (await guardDeprecatedOverrideShortcut({ client, shortcut, logger })) {
+    return;
+  }
   try {
     const userId = shortcut.user.id;
     const { role, disciplines } = await getRoleAndDisciplinesForUser(userId);
@@ -815,6 +827,15 @@ slackApp.action('decline_override', handleDeclineOverride);
 slackApp.command(getEnvironmentCommand('override-list'), async ({ command, ack, client, logger }) => {
   await ack();
   try {
+    if (await guardDeprecatedAdminCommand({
+      client,
+      command,
+      logger,
+      surface: '/override-list',
+    })) {
+      return;
+    }
+
     // Check if user is in the admin channel
     if (command.channel_id !== process.env.ADMIN_CHANNEL_ID) {
       await client.chat.postEphemeral({

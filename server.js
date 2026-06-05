@@ -50,10 +50,7 @@ const { testConnection, getHealthStatus } = require('./db/connection');
 const { runMigrations } = require('./db/migrate');
 const { setupDatabase } = require('./setup-database');
 const railwayCronRouter = require('./routes/railwayCron');
-<<<<<<< HEAD
 const slackOAuthRouter = require('./routes/slackOAuth');
-=======
->>>>>>> origin/main
 const adminWebRouter = require('./routes/adminWeb');
 
 const app = express();
@@ -89,11 +86,8 @@ app.use((req, res, next) => {
 // Mount test routes on the same Express app that the Slack receiver uses
 app.use('/test', testRoutes);
 app.use('/jobs', railwayCronRouter);
-<<<<<<< HEAD
 app.use('/auth', slackOAuthRouter);
 app.use('/admin/static', express.static(path.join(__dirname, 'public', 'admin')));
-=======
->>>>>>> origin/main
 app.use('/admin', adminWebRouter);
 
 // Health check route with database status

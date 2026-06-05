@@ -1,12 +1,25 @@
+<<<<<<< HEAD
 const { describe, it, expect, beforeEach, afterEach, mock } = require('bun:test');
 const {
   createSignedToken,
 } = require('../../services/slackOAuthSession');
+=======
+const { describe, it, expect, afterEach } = require('bun:test');
+const { resetModuleCache } = require('../helpers/mockIsolation');
+
+function loadAuth() {
+  resetModuleCache(['../../middleware/adminWebAuth']);
+  return require('../../middleware/adminWebAuth');
+}
+>>>>>>> origin/main
 
 function mockRes() {
   const res = {
     statusCode: 200,
+<<<<<<< HEAD
     headers: {},
+=======
+>>>>>>> origin/main
     body: null,
     status(code) {
       this.statusCode = code;
@@ -16,14 +29,18 @@ function mockRes() {
       this.body = payload;
       return this;
     },
+<<<<<<< HEAD
     redirect(url) {
       this.redirectUrl = url;
       return this;
     },
+=======
+>>>>>>> origin/main
   };
   return res;
 }
 
+<<<<<<< HEAD
 describe('requireAdminWebAuth', () => {
   const originalEnv = { ...process.env };
 
@@ -114,5 +131,61 @@ describe('requireAdminWebAuth', () => {
     requireAdminWebAuth(req, res, next);
     expect(res.redirectUrl).toBe('/auth/slack?returnTo=%2Fadmin');
     expect(next).not.toHaveBeenCalled();
+=======
+describe('adminWebAuth', () => {
+  const orig = {
+    WEB_ADMIN_SECRET: process.env.WEB_ADMIN_SECRET,
+    NODE_ENV: process.env.NODE_ENV,
+  };
+
+  afterEach(() => {
+    process.env.WEB_ADMIN_SECRET = orig.WEB_ADMIN_SECRET;
+    process.env.NODE_ENV = orig.NODE_ENV;
+  });
+
+  it('allows requests when secret unset in non-production', () => {
+    delete process.env.WEB_ADMIN_SECRET;
+    process.env.NODE_ENV = 'development';
+    const { requireAdminWebAuth } = loadAuth();
+    const req = { get: () => '', query: {} };
+    const res = mockRes();
+    let called = false;
+    requireAdminWebAuth(req, res, () => { called = true; });
+    expect(called).toBe(true);
+  });
+
+  it('rejects when secret unset in production', () => {
+    delete process.env.WEB_ADMIN_SECRET;
+    process.env.NODE_ENV = 'production';
+    const { requireAdminWebAuth } = loadAuth();
+    const req = { get: () => '', query: {} };
+    const res = mockRes();
+    requireAdminWebAuth(req, res, () => {});
+    expect(res.statusCode).toBe(503);
+  });
+
+  it('accepts Bearer token matching WEB_ADMIN_SECRET', () => {
+    process.env.WEB_ADMIN_SECRET = 'test-secret';
+    process.env.NODE_ENV = 'production';
+    const { requireAdminWebAuth } = loadAuth();
+    const req = {
+      get: (h) => (h.toLowerCase() === 'authorization' ? 'Bearer test-secret' : ''),
+      query: {},
+    };
+    const res = mockRes();
+    let called = false;
+    requireAdminWebAuth(req, res, () => { called = true; });
+    expect(called).toBe(true);
+  });
+
+  it('rejects invalid token', () => {
+    process.env.WEB_ADMIN_SECRET = 'test-secret';
+    process.env.NODE_ENV = 'production';
+    const { requireAdminWebAuth } = loadAuth();
+    const req = { get: () => '', query: { token: 'wrong' } };
+    const res = mockRes();
+    requireAdminWebAuth(req, res, () => {});
+    expect(res.statusCode).toBe(401);
+>>>>>>> origin/main
   });
 });

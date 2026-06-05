@@ -527,6 +527,7 @@ async function readOverrides() {
     return await cacheGetOrSetJson('overrides:all', CACHE_TTLS.overridesAll, async () => {
       const overrides = await OverridesRepository.getAll();
       return overrides.map(override => ({
+        id: override.id,
         sprintIndex: override.sprintIndex,
         role: override.role,
         originalSlackId: override.originalSlackId,

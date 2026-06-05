@@ -961,6 +961,62 @@ async function buildOverrideListModal(overrides) {
   };
 }
 
+async function removeOverride(override, removedBy) {
+  if (!override) return { removed: null, deleted: false };
+
+  if (USE_DATABASE) {
+    try {
+      const deleted = override.id != null
+        ? await OverridesRepository.deleteOverrideById(override.id, removedBy)
+        : await OverridesRepository.declineOverride(
+            override.sprintIndex,
+            override.role,
+            override.requestedBy,
+            override.newSlackId,
+            removedBy
+          );
+      if (!deleted) {
+        return { removed: override, deleted: false };
+      }
+      await cache.del('overrides:all');
+      await cache.del(`sprintUsers:${override.sprintIndex}`);
+
+      if (DUAL_WRITE_MODE) {
+        let overrides = loadOverrides();
+        overrides = overrides.filter((o) =>
+          !((override.id != null && o.id === override.id) ||
+            (Number(o.sprintIndex) === Number(override.sprintIndex) &&
+              o.role === override.role &&
+              o.requestedBy === override.requestedBy &&
+              o.newSlackId === override.newSlackId))
+        );
+        saveOverrides(overrides);
+      }
+
+      return { removed: override, deleted: true };
+    } catch (error) {
+      console.error('[removeOverride] Database error:', error);
+      // Fallback to JSON removal
+    }
+  }
+
+  let overrides = loadOverrides();
+  const idx = overrides.findIndex((o) =>
+    (override.id != null && o.id === override.id) ||
+    (Number(o.sprintIndex) === Number(override.sprintIndex) &&
+      o.role === override.role &&
+      o.requestedBy === override.requestedBy &&
+      o.newSlackId === override.newSlackId)
+  );
+  if (idx < 0) {
+    return { removed: override, deleted: false };
+  }
+  const removed = overrides[idx];
+  overrides.splice(idx, 1);
+  saveOverrides(overrides);
+  return { removed, deleted: true };
+}
+
 /**
  * admin_remove_override:
  * Removes an override from the array. If you want to revert on-call state,
@@ -978,34 +1034,9 @@ slackApp.action('admin_remove_override', async ({ ack, body, client, logger }) =
     }
     
     const removed = overrides[index];
-    
-    // Remove from database or JSON
-    if (USE_DATABASE) {
-      try {
-        // Delete by id so approved overrides are removed too (declineOverride only removes approved = false)
-        const deleted = removed.id != null
-          ? await OverridesRepository.deleteOverrideById(removed.id, body.user.id)
-          : await OverridesRepository.declineOverride(
-              removed.sprintIndex,
-              removed.role,
-              removed.requestedBy,
-              removed.newSlackId,
-              body.user.id
-            );
-        if (!deleted) {
-          logger.warn('[admin_remove_override] No row deleted for override', { removed: { id: removed.id, sprintIndex: removed.sprintIndex, role: removed.role } });
-        }
-        await cache.del('overrides:all');
-        await cache.del(`sprintUsers:${removed.sprintIndex}`);
-      } catch (error) {
-        console.error('[admin_remove_override] Database error:', error);
-        // Fallback to JSON removal
-        overrides.splice(index, 1);
-        saveOverrides(overrides);
-      }
-    } else {
-      overrides.splice(index, 1);
-      saveOverrides(overrides);
+    const { deleted } = await removeOverride(removed, body.user.id);
+    if (!deleted) {
+      logger.warn('[admin_remove_override] No row deleted for override', { removed: { id: removed.id, sprintIndex: removed.sprintIndex, role: removed.role } });
     }
 
     // Optionally notify the parties that the override was forcibly removed
@@ -1057,4 +1088,12 @@ slackApp.action('admin_remove_override', async ({ ack, body, client, logger }) =
   }
 });
 
-module.exports = { buildOverrideListModal, handleApproveOverride, handleDeclineOverride };
+module.exports = {
+  buildOverrideListModal,
+  handleApproveOverride,
+  handleDeclineOverride,
+  approveOverride,
+  declineOverride,
+  removeOverride,
+  getAllOverrides,
+};

@@ -18,6 +18,9 @@ const buildSnapshotMock = mock(() => Promise.resolve({
 const addParticipantMock = mock(() => Promise.resolve({ discipline: 'po', slackId: 'U9', name: 'New', active: true }));
 const deactivateParticipantMock = mock(() => Promise.resolve({ slackId: 'U1', active: false, reconciled: false }));
 const reorderParticipantsMock = mock(() => Promise.resolve({ discipline: 'po', slackIds: ['U1'] }));
+const approvePendingOverrideMock = mock(() => Promise.resolve({ rotationApplied: false, updated: false }));
+const declinePendingOverrideMock = mock(() => Promise.resolve({ declined: true }));
+const removeAdminOverrideMock = mock(() => Promise.resolve({ rotationApplied: false, updated: false }));
 
 mock.module('../../services/adminWebRotationState', () => ({
   ROLE_KEYS: ['account', 'producer', 'po', 'uiEng', 'beEng'],
@@ -31,6 +34,12 @@ mock.module('../../services/adminWebParticipants', () => ({
   reactivateParticipant: mock(() => Promise.resolve({ slackId: 'U1', active: true })),
   reorderParticipants: reorderParticipantsMock,
   isValidDiscipline: (d) => ['account', 'producer', 'po', 'uiEng', 'beEng'].includes(d),
+}));
+
+mock.module('../../services/adminWebOverrides', () => ({
+  approvePendingOverride: approvePendingOverrideMock,
+  declinePendingOverride: declinePendingOverrideMock,
+  removeAdminOverride: removeAdminOverrideMock,
 }));
 
 function buildApp() {
@@ -51,6 +60,9 @@ describe('adminWeb routes — participants', () => {
     addParticipantMock.mockClear();
     deactivateParticipantMock.mockClear();
     reorderParticipantsMock.mockClear();
+    approvePendingOverrideMock.mockClear();
+    declinePendingOverrideMock.mockClear();
+    removeAdminOverrideMock.mockClear();
   });
 
   afterEach(() => {
@@ -95,5 +107,66 @@ describe('adminWeb routes — participants', () => {
       .set('Content-Type', 'application/json');
     expect(res.status).toBe(200);
     expect(deactivateParticipantMock).toHaveBeenCalledWith({ slackId: 'U1' });
+  });
+});
+
+describe('adminWeb routes — overrides', () => {
+  const envSnap = snapshotEnv(['WEB_ADMIN_SECRET', 'NODE_ENV']);
+
+  beforeEach(() => {
+    approvePendingOverrideMock.mockClear();
+    declinePendingOverrideMock.mockClear();
+    removeAdminOverrideMock.mockClear();
+  });
+
+  afterEach(() => {
+    restoreEnv(envSnap);
+  });
+
+  it('POST /admin/api/overrides/approve requires auth', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/admin/api/overrides/approve')
+      .send({ id: 1 });
+    expect(res.status).toBe(401);
+  });
+
+  it('POST /admin/api/overrides/approve approves via JSON API', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/admin/api/overrides/approve')
+      .set('Authorization', 'Bearer route-test-secret')
+      .set('Content-Type', 'application/json')
+      .send({ id: 1 });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('ok');
+    expect(approvePendingOverrideMock).toHaveBeenCalledWith({ id: 1 });
+  });
+
+  it('POST /admin/api/overrides/decline declines pending override', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/admin/api/overrides/decline')
+      .set('Authorization', 'Bearer route-test-secret')
+      .set('Content-Type', 'application/json')
+      .send({
+        sprintIndex: 2,
+        role: 'po',
+        requestedBy: 'U1',
+        replacementSlackId: 'U2',
+      });
+    expect(res.status).toBe(200);
+    expect(declinePendingOverrideMock).toHaveBeenCalled();
+  });
+
+  it('POST /admin/api/overrides/remove removes override', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/admin/api/overrides/remove')
+      .set('Authorization', 'Bearer route-test-secret')
+      .set('Content-Type', 'application/json')
+      .send({ id: 3 });
+    expect(res.status).toBe(200);
+    expect(removeAdminOverrideMock).toHaveBeenCalledWith({ id: 3 });
   });
 });

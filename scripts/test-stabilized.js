@@ -16,6 +16,7 @@ const isolatedSuites = new Set([
   'tests/unit/snapshotService.recordAlign.test.js',
   'tests/unit/slackNotifier.updateChannelTopic.test.js',
   'tests/unit/adminWebParticipants.test.js',
+  'tests/unit/adminWebOverrides.test.js',
   'tests/unit/adminWebRoutes.test.js',
 ]);
 

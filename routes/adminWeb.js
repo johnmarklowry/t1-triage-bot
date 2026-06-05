@@ -7,6 +7,9 @@
  * - POST /admin/api/participants/:slackId/deactivate
  * - POST /admin/api/participants/:slackId/reactivate
  * - PUT  /admin/api/participants/:discipline/order — reorder active members
+ * - POST /admin/api/overrides/approve — approve pending override
+ * - POST /admin/api/overrides/decline — decline pending override
+ * - POST /admin/api/overrides/remove — remove pending or approved override
  */
 const express = require('express');
 const { requireAdminWebAuth } = require('../middleware/adminWebAuth');
@@ -18,6 +21,11 @@ const {
   reorderParticipants,
   isValidDiscipline,
 } = require('../services/adminWebParticipants');
+const {
+  approvePendingOverride,
+  declinePendingOverride,
+  removeAdminOverride,
+} = require('../services/adminWebOverrides');
 
 const router = express.Router();
 
@@ -52,6 +60,98 @@ function renderUpcoming(upcomingSchedule) {
       return `<section><h3>${label}</h3><p>${range}</p>${renderRolesTable(s.roles)}</section>`;
     })
     .join('');
+}
+
+function formatSprintLabel(sprintIndex, snapshot) {
+  const idx = Number(sprintIndex);
+  const candidates = [
+    snapshot.currentSprint,
+    ...(snapshot.upcomingSchedule || []),
+  ].filter(Boolean);
+  const sprint = candidates.find((s) => Number(s.sprintIndex) === idx);
+  if (!sprint) return `Sprint #${idx}`;
+  const name = sprint.sprintName || `Sprint ${idx}`;
+  if (sprint.startDate && sprint.endDate) {
+    return `${name} (${sprint.startDate} → ${sprint.endDate})`;
+  }
+  return name;
+}
+
+function overrideHiddenFields(override) {
+  const fields = [
+    `<input type="hidden" name="sprintIndex" value="${escapeHtml(override.sprintIndex)}" />`,
+    `<input type="hidden" name="role" value="${escapeHtml(override.role)}" />`,
+    `<input type="hidden" name="requestedBy" value="${escapeHtml(override.requestedBy)}" />`,
+    `<input type="hidden" name="replacementSlackId" value="${escapeHtml(override.newSlackId)}" />`,
+  ];
+  if (override.id != null) {
+    fields.unshift(`<input type="hidden" name="id" value="${escapeHtml(override.id)}" />`);
+  }
+  return fields.join('\n');
+}
+
+function renderOverrideRow(override, snapshot, tokenSuffix, options = {}) {
+  const sprintLabel = formatSprintLabel(override.sprintIndex, snapshot);
+  const status = override.approved ? 'Approved' : 'Pending';
+  const replacement = override.newName
+    ? `${override.newName} (${override.newSlackId})`
+    : override.newSlackId;
+  const hidden = overrideHiddenFields(override);
+  const actions = [];
+
+  if (!override.approved && options.allowApprove !== false) {
+    actions.push(`<form method="post" action="/admin/api/overrides/approve${tokenSuffix}" style="display:inline">
+      ${hidden}
+      <button type="submit">Approve</button>
+    </form>`);
+    actions.push(`<form method="post" action="/admin/api/overrides/decline${tokenSuffix}" style="display:inline">
+      ${hidden}
+      <button type="submit">Decline</button>
+    </form>`);
+  }
+  actions.push(`<form method="post" action="/admin/api/overrides/remove${tokenSuffix}" style="display:inline">
+    ${hidden}
+    <button type="submit">Remove</button>
+  </form>`);
+
+  return `<tr>
+    <td>${escapeHtml(sprintLabel)}</td>
+    <td>${escapeHtml(override.role)}</td>
+    <td><code>${escapeHtml(override.requestedBy)}</code></td>
+    <td><code>${escapeHtml(replacement)}</code></td>
+    <td>${escapeHtml(status)}</td>
+    <td class="actions">${actions.join(' ')}</td>
+  </tr>`;
+}
+
+function renderOverridesSection(snapshot, tokenSuffix) {
+  const pending = snapshot.overrides?.pending || [];
+  const approved = snapshot.overrides?.approved || [];
+
+  if (!pending.length && !approved.length) {
+    return '<p>No coverage overrides.</p>';
+  }
+
+  const pendingRows = pending.map((o) => renderOverrideRow(o, snapshot, tokenSuffix)).join('');
+  const approvedRows = approved.map((o) => renderOverrideRow(o, snapshot, tokenSuffix, { allowApprove: false })).join('');
+
+  const pendingTable = pending.length
+    ? `<h3>Pending (${pending.length})</h3>
+      <table>
+        <thead><tr><th>Sprint</th><th>Role</th><th>Requested by</th><th>Replacement</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>${pendingRows}</tbody>
+      </table>`
+    : '<p>No pending override requests.</p>';
+
+  const approvedTable = approved.length
+    ? `<h3>Approved (${approved.length})</h3>
+      <table>
+        <thead><tr><th>Sprint</th><th>Role</th><th>Requested by</th><th>Replacement</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>${approvedRows}</tbody>
+      </table>`
+    : '';
+
+  return `${pendingTable}${approvedTable}`;
 }
 
 function renderParticipantLists(participantLists, tokenSuffix, flash) {
@@ -120,7 +220,6 @@ function renderHtmlPage(snapshot, options = {}) {
   const sprintHeading = sprint
     ? `${escapeHtml(sprint.sprintName)} (index ${escapeHtml(sprint.sprintIndex)})`
     : 'No active sprint for today';
-  const pending = snapshot.overrides?.pendingCount ?? 0;
   const tokenSuffix = options.tokenSuffix || '';
   const flash = options.flash || null;
 
@@ -161,8 +260,9 @@ function renderHtmlPage(snapshot, options = {}) {
     ${renderParticipantLists(snapshot.participantLists, tokenSuffix, flash)}
   </section>
   <section>
-    <h2>Pending coverage overrides</h2>
-    <p>${pending} pending request(s). Use <code>/admin/api/rotation-state</code> for full detail.</p>
+    <h2>Coverage overrides</h2>
+    <p class="meta">Approve, decline, or remove coverage overrides. Current-sprint changes sync on-call state automatically.</p>
+    ${renderOverridesSection(snapshot, tokenSuffix)}
   </section>
   <section>
     <h2>Upcoming schedule</h2>
@@ -302,6 +402,52 @@ router.put('/api/participants/:discipline/order', async (req, res) => {
     jsonError(res, 400, error instanceof Error ? error.message : String(error));
   }
 });
+
+function parseOverrideBody(req) {
+  const body = req.body || {};
+  return {
+    id: body.id,
+    sprintIndex: body.sprintIndex,
+    role: body.role,
+    requestedBy: body.requestedBy,
+    replacementSlackId: body.replacementSlackId || body.newSlackId,
+  };
+}
+
+async function handleOverrideMutation(req, res, action) {
+  try {
+    const input = parseOverrideBody(req);
+    let result;
+    let message;
+    if (action === 'approve') {
+      result = await approvePendingOverride(input);
+      message = result.rotationApplied && result.updated
+        ? 'Override approved and current sprint rotation updated'
+        : 'Override approved';
+    } else if (action === 'decline') {
+      result = await declinePendingOverride(input);
+      message = 'Override declined';
+    } else {
+      result = await removeAdminOverride(input);
+      message = result.rotationApplied && result.updated
+        ? 'Override removed and current sprint rotation updated'
+        : 'Override removed';
+    }
+    if (req.is('json')) {
+      return res.json({ status: 'ok', ...result });
+    }
+    await redirectToDashboard(req, res, { type: 'ok', message });
+  } catch (error) {
+    console.error(`[adminWeb] override ${action} failed:`, error);
+    const errMessage = error instanceof Error ? error.message : String(error);
+    if (req.is('json')) return jsonError(res, 400, errMessage);
+    await redirectToDashboard(req, res, { type: 'error', message: errMessage });
+  }
+}
+
+router.post('/api/overrides/approve', (req, res) => handleOverrideMutation(req, res, 'approve'));
+router.post('/api/overrides/decline', (req, res) => handleOverrideMutation(req, res, 'decline'));
+router.post('/api/overrides/remove', (req, res) => handleOverrideMutation(req, res, 'remove'));
 
 router.get('/', async (req, res) => {
   try {

@@ -2,6 +2,7 @@
  * server.js
  ********************************/
 const express = require('express');
+const path = require('path');
 
 /** In development, if the port is in use, try the next port up to basePort + 10. */
 function listenWithPortFallback(app, basePort, onListening) {
@@ -86,6 +87,7 @@ app.use((req, res, next) => {
 app.use('/test', testRoutes);
 app.use('/jobs', railwayCronRouter);
 app.use('/auth', slackOAuthRouter);
+app.use('/admin/static', express.static(path.join(__dirname, 'public', 'admin')));
 app.use('/admin', adminWebRouter);
 
 // Health check route with database status
